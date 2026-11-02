@@ -21,11 +21,9 @@ const safeEqual = (a, b) => typeof a === 'string' && typeof b === 'string' && a.
 
 export class OAuth {
   constructor({ baseUrl, github, stateFile, githubBase = 'https://github.com', githubApi = 'https://api.github.com', fetchImpl = fetch }) {
-    if (!github?.clientId || !github?.clientSecret || !github?.allowedLogins?.length) throw new Error('GitHub config needs clientId, clientSecret and allowedLogins.');
+    this.configureGithub(github);
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.resource = `${this.baseUrl}/mcp`;
-    this.github = github;
-    this.allowed = new Set(github.allowedLogins.map(l => l.toLowerCase()));
     this.githubBase = githubBase;
     this.githubApi = githubApi;
     this.fetch = fetchImpl;
@@ -35,13 +33,35 @@ export class OAuth {
     this.state = this.load();
   }
 
+  // Applies github.json; also called when the file changes while running.
+  configureGithub(github) {
+    if (!github?.clientId || !github?.clientSecret || !Array.isArray(github.allowedLogins) || !github.allowedLogins.length || !github.allowedLogins.every(l => typeof l === 'string')) {
+      throw new Error('GitHub config needs clientId, clientSecret and allowedLogins.');
+    }
+    this.github = github;
+    this.allowed = new Set(github.allowedLogins.map(l => l.toLowerCase()));
+  }
+
+  allowedLogin(login) { return typeof login === 'string' && this.allowed.has(login.toLowerCase()); }
+
+  // Creates the state file on first run only. A file that exists but can't be used is
+  // reported instead of replaced: replacing it would change the signing key and drop every
+  // client and refresh token without a word.
   load() {
-    try {
-      const state = JSON.parse(readFileSync(this.stateFile, 'utf8'));
-      if (state.key && state.clients && state.refresh) return state;
-    } catch { /* first run */ }
-    const state = { key: random(), clients: {}, refresh: {} };
-    this.save(state);
+    let text;
+    try { text = readFileSync(this.stateFile, 'utf8'); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw new Error(`Couldn't read ${this.stateFile}: ${error.message}`);
+      const state = { key: random(), clients: {}, refresh: {} };
+      this.save(state);
+      return state;
+    }
+    let state;
+    try { state = JSON.parse(text); } catch { /* reported below */ }
+    const isMap = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+    if (!isMap(state) || typeof state.key !== 'string' || !state.key || !isMap(state.clients) || !isMap(state.refresh)) {
+      throw new Error(`${this.stateFile} is damaged, so Do-It won't start rather than replace it. It holds Do-It's signing key, registered clients and refresh tokens. Restore it from a backup, or delete it to sign every client out and start fresh.`);
+    }
     return state;
   }
 
@@ -148,7 +168,7 @@ export class OAuth {
     } catch {
       return back({ error: 'server_error', error_description: 'GitHub sign-in failed.' });
     }
-    if (typeof login !== 'string' || !this.allowed.has(login.toLowerCase())) {
+    if (!this.allowedLogin(login)) {
       return back({ error: 'access_denied', error_description: 'This GitHub account is not allowed.' });
     }
     const client = this.client(request.clientId);
@@ -205,6 +225,7 @@ wants control of Claude Code on this server. It will return to <b>${escapeHtml(w
       const hash = sha256(form.get('refresh_token') ?? '');
       const entry = this.state.refresh[hash];
       if (!entry || entry.exp < now() || entry.clientId !== clientId) return error(400, 'invalid_grant', 'Invalid refresh token.');
+      if (!this.allowedLogin(entry.login)) { delete this.state.refresh[hash]; this.save(); return error(400, 'invalid_grant', 'This GitHub account is no longer allowed.'); }
       delete this.state.refresh[hash]; // rotate
       return json(200, this.issue(clientId, entry.login));
     }
@@ -254,7 +275,9 @@ wants control of Claude Code on this server. It will return to <b>${escapeHtml(w
     if (!payload || !safeEqual(signature, this.sign(payload))) return undefined;
     try {
       const claims = JSON.parse(Buffer.from(payload, 'base64url').toString());
-      if (claims.aud !== this.resource || claims.exp < now() || !this.allowed.has(String(claims.sub).toLowerCase())) return undefined;
+      // The login must still be allowed and the client still registered, so a login removed
+      // from github.json, or a client that was pruned, loses access at its next request.
+      if (claims.aud !== this.resource || claims.exp < now() || !this.allowedLogin(claims.sub) || !this.client(claims.cid)) return undefined;
       return claims.sub;
     } catch { return undefined; }
   }

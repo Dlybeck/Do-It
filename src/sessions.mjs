@@ -11,15 +11,23 @@ import { Driving } from './driving.mjs';
 import { allowedRoot, canonical, inside } from './paths.mjs';
 import { savedPermissionMode } from './mode.mjs';
 import { Trust } from './trust.mjs';
+import { UserError } from './errors.mjs';
 
 export const PERMISSION_MODES = ['auto', 'acceptEdits', 'bypassPermissions', 'plan', 'default'];
 // A full session UUID, or the first 8+ characters of one (background ids are the first 8).
 export const SESSION_ID = /^[0-9a-f]{8}(?:[0-9a-f-]{0,28})$/i;
-export class UserError extends Error {}
+export { UserError };
 
-// Spawned sessions must use the CLI's own login, not a parent Claude process's
-// host-provided auth, so drop inherited Claude session variables.
+// The environment for the claude processes Do-It runs (and so for Claude Code's background
+// host, when one of them is what starts it; a host already running keeps its own). As a
+// service, Do-It has no parent Claude Code session and passes its environment through, so
+// the owner's own settings (CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_OAUTH_TOKEN,
+// ANTHROPIC_BASE_URL and the like) are kept. Started from inside a Claude Code session
+// (CLAUDECODE is set, as in a desktop-app terminal or a test run by Claude), it drops what
+// that session passes to its children, so claude uses its own login rather than the
+// parent's host-provided auth and plumbing.
 export function cleanEnv(env = process.env) {
+  if (!env.CLAUDECODE) return { ...env };
   return Object.fromEntries(Object.entries(env).filter(([k]) =>
     k === 'CLAUDE_CONFIG_DIR' || !/^(CLAUDE|ANTHROPIC_BASE_URL$|AI_AGENT$)/.test(k)));
 }
@@ -42,6 +50,8 @@ export function runClaude(args, { cwd = process.env.HOME, timeout = 60_000 } = {
 const iso = ms => (typeof ms === 'number' && ms > 0 ? new Date(ms).toISOString() : undefined);
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}… [${text.length - max} more chars]` : text);
 const short = id => String(id).slice(0, 8);
+// Status lines kept for list_sessions; the least recently used are dropped beyond this.
+const MAX_CACHED_LINES = 500;
 
 export class Sessions {
   // `driving` records the turns Do-It starts, for hooks/role-context.mjs (see src/driving.mjs).
@@ -123,7 +133,11 @@ export class Sessions {
   // Opening sentence of the session's newest assistant text, cached until the transcript changes.
   async latestLine(sessionId, cwd, modified) {
     const cached = this.lines.get(sessionId);
-    if (cached && modified !== undefined && cached.modified === modified) return cached.line;
+    if (cached && modified !== undefined && cached.modified === modified) {
+      this.lines.delete(sessionId); // re-inserted below, as the most recently used
+      this.lines.set(sessionId, cached);
+      return cached.line;
+    }
     let line;
     try {
       const messages = await this.sdk.getSessionMessages(sessionId, cwd ? { dir: cwd } : {});
@@ -131,7 +145,11 @@ export class Sessions {
         if (messages[i].type === 'assistant') line = openingSentence(renderMessage(messages[i]).replace(/\[tool: [^\]]+\]/g, ''));
       }
     } catch { /* unreadable transcript: no status line */ }
-    if (modified !== undefined) this.lines.set(sessionId, { modified, line });
+    if (modified !== undefined) {
+      this.lines.delete(sessionId);
+      this.lines.set(sessionId, { modified, line });
+      while (this.lines.size > MAX_CACHED_LINES) this.lines.delete(this.lines.keys().next().value);
+    }
     return line;
   }
 
@@ -223,25 +241,47 @@ export class Sessions {
     }
     // A background session resumes with its saved options, including its permission mode.
     const keepsSavedMode = Boolean(live) || (await this.wasBackground(sessionId));
-    if (keepsSavedMode && !this.allowBypassPermissions && (await this.savedMode(sessionId)) === 'bypassPermissions') {
-      throw new UserError(`Session ${short(sessionId)} runs in bypassPermissions, which is turned off. Set "allowBypassPermissions": true in Do-It's config.json to continue it, or use start_session for a new session.`);
-    }
-    let note;
+    if (keepsSavedMode && !this.allowBypassPermissions) await this.refuseSavedBypass(sessionId, 'continue it');
+    let note, stopped = false, interrupted = false;
     if (live) {
-      if (live.status === 'busy' && !interrupt) throw new UserError(`Session ${short(sessionId)} is busy. Wait for it to go idle, or send again with interrupt: true to stop its current turn first.`);
-      const stopped = await this.run(['stop', live.id]);
-      if (!stopped.ok) throw new UserError(`Couldn't stop session ${short(sessionId)} before sending: ${stopped.stderr || stopped.stdout || 'claude stop failed'}`);
-      await this.waitForExit(sessionId);
-      if (live.status === 'busy') note = 'Interrupted the running turn.';
+      // resolve()'s snapshot can be stale by now, so check again right before stopping.
+      const current = (await this.live()).get(sessionId);
+      if (current && current.kind !== 'background') throw new UserError(`Session ${short(sessionId)} is open in an interactive window (desktop app, terminal or Remote Control), so Do-It can't send to it without forking a copy. Close it there and send again, or use start_session for a new session.`);
+      if (current?.status === 'busy' && !interrupt) throw new UserError(`Session ${short(sessionId)} is busy. Wait for it to go idle, or send again with interrupt: true to stop its current turn first.`);
+      if (current) {
+        const result = await this.run(['stop', current.id]);
+        if (!result.ok) throw new UserError(`Couldn't stop session ${short(sessionId)} before sending: ${result.stderr || result.stdout || 'claude stop failed'}`);
+        stopped = true;
+        interrupted = current.status === 'busy';
+        if (interrupted) note = 'Interrupted the running turn.';
+      }
     }
-    await this.trust.ensure(cwd);
     const flags = keepsSavedMode ? [] : ['--permission-mode', permissionMode];
-    const result = await this.driven(sessionId, onId => this.background(['--bg', '--resume', sessionId, ...flags, '--', text], cwd, onId));
+    let result;
+    try {
+      if (stopped) await this.waitForExit(sessionId);
+      await this.trust.ensure(cwd);
+      result = await this.driven(sessionId, onId => this.background(['--bg', '--resume', sessionId, ...flags, '--', text], cwd, onId));
+    } catch (error) {
+      if (!stopped) throw error;
+      // The session is no longer running, so say so: the caller can't tell from the cause alone.
+      const cause = error instanceof UserError ? error.message : 'internal error';
+      if (!(error instanceof UserError)) console.error(error);
+      throw new UserError(`Session ${short(sessionId)} was stopped to deliver the message, but Claude Code didn't resume it, so the message wasn't delivered${interrupted ? ' and the turn it interrupted is lost' : ''}. The session is stopped now; its conversation is kept, so send again to retry. Cause: ${cause}`);
+    }
     if (result.backgroundId && !sessionId.startsWith(result.backgroundId)) {
       this.driving.remove(sessionId); // the turn runs in the copy, which is listed under its own id
       note = [note, `Claude Code continued this as a new session ${result.sessionId}.`].filter(Boolean).join(' ');
     }
     return { ...result, continuedFrom: sessionId, note };
+  }
+
+  // Refuses when bypass is off and the session's saved mode is bypassPermissions or unknown:
+  // a background session resumes in its saved mode, and an unknown one may be bypass.
+  async refuseSavedBypass(sessionId, action) {
+    const mode = await this.savedMode(sessionId);
+    if (mode === 'bypassPermissions') throw new UserError(`Session ${short(sessionId)} runs in bypassPermissions, which is turned off. Set "allowBypassPermissions": true in Do-It's config.json to ${action}, or use start_session for a new session.`);
+    if (mode === undefined) throw new UserError(`Couldn't find the permission mode session ${short(sessionId)} was saved with, and it resumes in that mode, so Do-It won't ${action} while bypassPermissions is turned off. Use start_session for a new session.`);
   }
 
   async waitForExit(sessionId) {

@@ -25,7 +25,7 @@ const FAR = 'dddddddd-1111-2222-3333-444444444444'; // outside the allowed folde
 const TWIN = 'aaaaaaaa-9999-2222-3333-444444444444'; // shares BG's first 8 characters
 
 // A fake claude CLI and SDK with a little state, recording every CLI call.
-function fake({ roots = [ALLOWED], bgStatus = 'idle', extraStored = [], modes = {} } = {}) {
+function fake({ roots = [ALLOWED], bgStatus = 'idle', extraStored = [], modes = { [BG]: 'auto' } } = {}) {
   const live = [
     { pid: 10, id: 'aaaaaaaa', sessionId: BG, cwd: APP, kind: 'background', status: bgStatus, name: 'bg job' },
     { pid: 11, sessionId: TTY, cwd: APP, kind: 'interactive', status: 'idle' },
@@ -233,6 +233,7 @@ test('the MCP server exposes exactly the five tools and reports errors as tool e
   });
   const { sessions } = fake();
   const app = createApp({ oauth, sessions });
+  oauth.state.clients.client = { redirect_uris: [], method: 'none', created: 0 };
   const { access_token: token } = oauth.issue('client', 'owner');
   const client = new Client({ name: 't', version: '0' });
   await client.connect(new StreamableHTTPClientTransport(new URL('https://do-it.test/mcp'), {
@@ -353,4 +354,77 @@ test('a root that is a symlink to / is refused everywhere', async () => {
   assert.throws(() => new Sessions({ roots: [link] }), /whole drive or file system root/);
   assert.throws(() => new Trust({ roots: [link] }), /whole drive or file system root/);
   assert.throws(() => addFolder(dir, link), /whole drive or file system root/);
+});
+
+// --- PR #1 review fixes ---
+
+test('the saved mode is found behind a long tail, and across chunk boundaries', async () => {
+  const { savedPermissionMode } = await import('../src/mode.mjs');
+  const { writeFileSync } = await import('node:fs');
+  const config = mkdtempSync(path.join(tmpdir(), 'do-it-claude-'));
+  mkdirSync(path.join(config, 'projects', '-p'), { recursive: true });
+  const file = path.join(config, 'projects', '-p', `${BG}.jsonl`);
+  const env = { CLAUDE_CONFIG_DIR: config };
+  const tail = Array.from({ length: 3000 }, () => JSON.stringify({ type: 'user', toolUseResult: 'x'.repeat(1000) })).join('\n');
+  writeFileSync(file, [JSON.stringify({ type: 'user', permissionMode: 'bypassPermissions' }), tail].join('\n'));
+  assert.equal(savedPermissionMode(BG, { env }), 'bypassPermissions'); // 3 MB after the record
+  // Every split point of a record across two small chunks.
+  const record = JSON.stringify({ permissionMode: 'acceptEdits' });
+  for (let pad = 0; pad < 80; pad++) {
+    writeFileSync(file, 'p'.repeat(pad) + record + 'q'.repeat(100));
+    assert.equal(savedPermissionMode(BG, { env, chunk: 50 }), 'acceptEdits', `pad ${pad}`);
+  }
+  writeFileSync(file, tail);
+  assert.equal(savedPermissionMode(BG, { env }), undefined);
+});
+
+test('with bypass off, a background session whose saved mode is unknown is not continued', async () => {
+  const { sessions, cli } = fake({ modes: {} });
+  await assert.rejects(sessions.send(BG, 'hi'), /Couldn't find the permission mode session aaaaaaaa was saved with.*won't continue it while bypassPermissions is turned off/);
+  assert.deepEqual(cli(), []);
+  const old = fake({ modes: {} }); // never a background session: resumes with the chosen mode
+  await old.sessions.send(OLD, 'hi');
+  assert.deepEqual(old.cli(), [['--bg', '--resume', OLD, '--permission-mode', 'auto', '--', 'hi']]);
+  const on = fake({ modes: {} });
+  on.sessions.configure({ roots: [ALLOWED], allowBypassPermissions: true });
+  await on.sessions.send(BG, 'hi');
+  assert.equal(on.cli().length, 2);
+});
+
+test('a session that turned busy since it was looked up is not interrupted without interrupt: true', async () => {
+  const f = fake();
+  const run = f.sessions.run;
+  let agentCalls = 0;
+  f.sessions.run = async (args, options) => {
+    if (args[0] === 'agents' && !args.includes('--all') && ++agentCalls === 2) f.live[0].status = 'busy';
+    return run(args, options);
+  };
+  await assert.rejects(f.sessions.send(BG, 'hi'), /Session aaaaaaaa is busy/);
+  assert.deepEqual(f.cli(), []);
+});
+
+test('a failed resume after the stop says the session was stopped and the message not delivered', async () => {
+  for (const status of ['idle', 'busy']) {
+    const f = fake({ bgStatus: status });
+    const run = f.sessions.run;
+    const resumes = [];
+    f.sessions.run = async (args, options) => (args[0] === '--bg' ? (resumes.push(args), { ok: false, stdout: '', stderr: 'resume exploded' }) : run(args, options));
+    const expected = status === 'busy'
+      ? /was stopped to deliver the message, but Claude Code didn't resume it, so the message wasn't delivered and the turn it interrupted is lost\. .*send again to retry\. Cause: .*resume exploded/
+      : /was stopped to deliver the message, but Claude Code didn't resume it, so the message wasn't delivered\. The session is stopped now/;
+    await assert.rejects(f.sessions.send(BG, 'hi', { interrupt: true }), expected);
+    assert.deepEqual(f.cli(), [['stop', 'aaaaaaaa']]);
+    assert.deepEqual(resumes, [['--bg', '--resume', BG, '--', 'hi']]);
+  }
+  // A failure before anything was stopped is reported as it is.
+  const f = fake();
+  f.sessions.trust = { ensure: async () => { throw new Error('boom'); } };
+  await assert.rejects(f.sessions.send(OLD, 'hi'), /^Error: boom$/);
+});
+
+test('the status-line cache keeps at most 500 sessions', async () => {
+  const { sessions } = fake();
+  for (let i = 0; i < 700; i++) await sessions.latestLine(`id-${i}`, APP, 1);
+  assert.equal(sessions.lines.size, 500);
+  assert.ok(!sessions.lines.has('id-0') && sessions.lines.has('id-699'));
 });

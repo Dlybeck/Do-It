@@ -114,7 +114,8 @@ list of absolute folders, and each one includes all its subfolders.
   doesn't trust, and sessions you run in the desktop app don't write the CLI's trust
   record. So before starting or resuming a session in an allowed folder, Do-It writes the
   same entry in `~/.claude.json` that accepting the trust prompt writes. It never does this
-  for folders outside the allowlist.
+  for folders outside the allowlist. Running Claude Code processes write that file too, so
+  Do-It reads it again just before replacing it and redoes its change if it changed.
 
 `trustedRoots`, the setting's earlier name, is still read, and `do-it setup` or
 `add-folder` rename it. Upgrading from a version that had the public address built in? Add
@@ -132,8 +133,9 @@ action. `permissionMode` can also be `acceptEdits`, `plan` or `default`.
 ```
 
 It is off by default. While it's off, `send_message` also won't continue a background session
-that last ran in `bypassPermissions`. Like `allowedRoots`, the setting takes effect without
-a restart.
+that last ran in `bypassPermissions`, or one whose saved mode can't be found in its
+transcript, because a background session resumes in its saved mode. Like `allowedRoots`,
+the setting takes effect without a restart.
 
 ## Tools
 
@@ -241,7 +243,7 @@ doesn't reach Claude Code's background sessions.
 | Where | Setting |
 |---|---|
 | `~/.config/do-it/config.json` | `publicUrl` (required), `allowedRoots`, `allowBypassPermissions`. Templates are in `examples/`. `allowedRoots` and `allowBypassPermissions` reload automatically. |
-| `~/.config/do-it/github.json` | `clientId`, `clientSecret`, `allowedLogins`. Read at start, so restart after changing it. |
+| `~/.config/do-it/github.json` | `clientId`, `clientSecret`, `allowedLogins`. Reloads automatically: a login you remove loses access at its next request. |
 | `~/.config/do-it/role.md` | Optional text for the [role-context hook](#role-context-optional). |
 | `~/.local/state/do-it/driving/` | The turns Do-It is driving right now, for the role-context hook (managed by Do-It). |
 | Environment | `DO_IT_PUBLIC_URL` overrides `publicUrl`. `DO_IT_PORT` (default 8787), `DO_IT_CONFIG_DIR`, `DO_IT_STATE_DIR` (default `~/.local/state/do-it`) and `DO_IT_CLAUDE_BIN` (path to `claude`) are also read. |
@@ -249,8 +251,9 @@ doesn't reach Claude Code's background sessions.
 How sign-in works: Do-It is its own small OAuth 2.1 server, with dynamic client
 registration, PKCE and rotating refresh tokens. It hands the identity check to GitHub and
 issues tokens only to the logins in `allowedLogins`. Its signing key, registered clients and
-refresh tokens are kept in `oauth.json` in the state folder (mode 600). Delete that file to
-sign every client out.
+refresh tokens are kept in `oauth.json` in the state folder (mode 600). To sign every client
+out, stop the server, delete that file and start it again. If the file is damaged, the server
+won't start and says so, rather than replacing it.
 
 The server logs one line per HTTP request to stdout: method, path, status, client address,
 user agent and MCP protocol headers. Query strings are never logged, because they carry

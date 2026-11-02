@@ -5,11 +5,11 @@
 import { createServer as createHttpServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, pipeline } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { configDirFrom, loadConfig, stateDirFrom, watchConfig } from './config.mjs';
+import { configDirFrom, loadConfig, stateDirFrom, watchConfig, watchGithub } from './config.mjs';
 import { Driving } from './driving.mjs';
 import { OAuth } from './oauth.mjs';
 import { PERMISSION_MODES, SESSION_ID, Sessions, UserError } from './sessions.mjs';
@@ -126,8 +126,13 @@ export function listen(app, { host = '127.0.0.1', port = 8787 } = {}) {
       const h = req.headers;
       console.log(`${req.method} ${new URL(req.url, 'http://x').pathname} ${response.status} from=${h['x-forwarded-for'] ?? '-'} ua=${JSON.stringify(h['user-agent'] ?? '')} accept=${JSON.stringify(h.accept ?? '')} mcp-version=${h['mcp-protocol-version'] ?? '-'}`);
       res.writeHead(response.status, Object.fromEntries(response.headers));
-      if (response.body) Readable.fromWeb(response.body).pipe(res);
-      else res.end();
+      // pipeline() handles a failing body (an SSE stream that errors) and a client that goes
+      // away, closing the response instead of leaving an unhandled 'error' event.
+      if (response.body) {
+        pipeline(Readable.fromWeb(response.body), res, error => {
+          if (error && error.code !== 'ERR_STREAM_PREMATURE_CLOSE') console.error(`Response stream error: ${error.message}`);
+        });
+      } else res.end();
     } catch (error) {
       console.error(`HTTP bridge error: ${error.message}`);
       if (!res.headersSent) res.writeHead(500);
@@ -135,14 +140,20 @@ export function listen(app, { host = '127.0.0.1', port = 8787 } = {}) {
     }
   });
   http.listen(port, host);
-  return { http, close: async () => { await app.close(); http.close(); } };
+  // Open keep-alive and SSE connections would keep close() waiting, so they are closed too.
+  const close = async () => {
+    const closed = new Promise(resolve => http.close(() => resolve()));
+    http.closeAllConnections();
+    await Promise.allSettled([app.close(), closed]);
+  };
+  return { http, close };
 }
 
 // Starts the server with the settings in DO_IT_CONFIG_DIR (default ~/.config/do-it).
 export function main(env = process.env) {
   const configDir = configDirFrom(env);
   const port = Number(env.DO_IT_PORT ?? 8787);
-  let settings, sessions;
+  let settings, sessions, oauth;
   try {
     settings = loadConfig(configDir, env);
     // No turn is in flight at startup, so any registered turn is a leftover from a crash.
@@ -150,17 +161,28 @@ export function main(env = process.env) {
     const driving = new Driving({ dir: path.join(stateDirFrom(env), 'driving') });
     driving.clear();
     sessions = new Sessions({ roots: settings.roots, allowBypassPermissions: settings.allowBypassPermissions, driving });
+    oauth = new OAuth({ baseUrl: settings.baseUrl, github: settings.github, stateFile: path.join(stateDirFrom(env), 'oauth.json') });
   } catch (error) { console.error(error.message); process.exit(1); }
-  const { baseUrl, github } = settings;
+  const { baseUrl } = settings;
   const describe = () => `allowed folders: ${sessions.roots.join(', ') || 'none (every tool refuses until allowedRoots is set)'}${sessions.allowBypassPermissions ? '; bypassPermissions allowed' : ''}`;
   const stopWatching = watchConfig(configDir, live => {
     try { sessions.configure(live); console.log(`config.json changed; ${describe()}`); }
     catch (error) { console.error(`Ignoring config.json change, keeping the previous settings: ${error.message}`); }
   });
-  const oauth = new OAuth({ baseUrl, github, stateFile: path.join(stateDirFrom(env), 'oauth.json') });
+  // A login removed from allowedLogins loses access at its next request, without a restart.
+  const stopWatchingGithub = watchGithub(configDir, github => {
+    try { oauth.configureGithub(github); console.log(`github.json changed; allowed logins: ${github.allowedLogins.join(', ')}`); }
+    catch (error) { console.error(`Ignoring github.json change, keeping the previous settings: ${error.message}`); }
+  });
   const server = listen(createApp({ oauth, sessions }), { port });
   server.http.once('listening', () => console.log(`Do-It ${VERSION} on http://127.0.0.1:${port}/mcp, public ${baseUrl}/mcp, ${describe()}`));
-  const stop = () => { stopWatching(); return server.close(); };
+  // Exit once connections are closed; a stuck close still exits after a few seconds.
+  const stop = () => {
+    stopWatching();
+    stopWatchingGithub();
+    setTimeout(() => process.exit(0), 5000).unref();
+    server.close().finally(() => process.exit(0));
+  };
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);
   return server;

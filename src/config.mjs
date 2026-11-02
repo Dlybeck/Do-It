@@ -1,6 +1,6 @@
 // Where Do-It keeps its settings, and how they are read and written.
 //   config.json  publicUrl, allowedRoots, allowBypassPermissions (re-read while running)
-//   github.json  clientId, clientSecret, allowedLogins (read at start)
+//   github.json  clientId, clientSecret, allowedLogins (re-read while running)
 import { chmodSync, mkdirSync, readFileSync, renameSync, watchFile, unwatchFile, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -55,6 +55,18 @@ export function watchConfig(dir, onChange, { interval = 2000, log = console } = 
     if (now.mtimeMs === before.mtimeMs && now.size === before.size) return;
     try { onChange(liveSettings(readJson(dir, 'config.json'))); }
     catch (error) { log.error(`Ignoring config.json change, keeping the previous settings: ${error.message}`); }
+  };
+  watchFile(file, { interval, persistent: false }, listener);
+  return () => unwatchFile(file, listener);
+}
+
+// Re-reads github.json when it changes and hands it to onChange, which validates it.
+export function watchGithub(dir, onChange, { interval = 2000, log = console } = {}) {
+  const file = path.join(dir, 'github.json');
+  const listener = (now, before) => {
+    if (now.mtimeMs === before.mtimeMs && now.size === before.size) return;
+    try { onChange(readJson(dir, 'github.json', { required: true })); }
+    catch (error) { log.error(`Ignoring github.json change, keeping the previous settings: ${error.message}`); }
   };
   watchFile(file, { interval, persistent: false }, listener);
   return () => unwatchFile(file, listener);
