@@ -1,0 +1,4 @@
+{
+  "publicUrl": "https://your-host.example.ts.net",
+  "allowedRoots": ["/home/you/code"]
+}

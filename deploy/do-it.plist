@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd agent for Do-It on macOS. "do-it service" prints this with the paths filled in:
+       do-it service > ~/Library/LaunchAgents/do-it.plist
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/do-it.plist
+     launchd starts agents with a minimal PATH, so the claude CLI is given by full path
+     in DO_IT_CLAUDE_BIN. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>do-it</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{NODE}}</string>
+    <string>{{APP_DIR}}/bin/do-it.mjs</string>
+    <string>start</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{APP_DIR}}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{{PATH}}</string>
+    <key>DO_IT_CLAUDE_BIN</key>
+    <string>{{CLAUDE_BIN}}</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>{{HOME}}/Library/Logs/do-it.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{HOME}}/Library/Logs/do-it.log</string>
+</dict>
+</plist>
