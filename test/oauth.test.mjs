@@ -145,8 +145,11 @@ test('authorize floods store nothing and do not block other clients', async () =
 
 test('trust is recorded only for folders under owner-approved roots', async () => {
   const { Trust } = await import('../src/trust.mjs');
-  const { mkdirSync, readFileSync, writeFileSync, statSync } = await import('node:fs');
-  const base = mkdtempSync(path.join(tmpdir(), 'do-it-trust-'));
+  const { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync, statSync } = await import('node:fs');
+  // Claude Code keys trust by a session's physical working folder (process.cwd()), so Do-It
+  // records the resolved path. Resolve the temp folder too: on macOS it sits behind the
+  // /var -> /private/var symlink.
+  const base = realpathSync(mkdtempSync(path.join(tmpdir(), 'do-it-trust-')));
   const projects = path.join(base, 'Projects');
   mkdirSync(path.join(projects, 'App', 'sub'), { recursive: true });
   mkdirSync(path.join(base, 'Other'));
@@ -160,6 +163,14 @@ test('trust is recorded only for folders under owner-approved roots', async () =
   assert.deepEqual(config.projects[path.join(projects, 'App')], { allowedTools: ['x'], hasTrustDialogAccepted: true });
   assert.equal(statSync(configFile).mode & 0o777, 0o600);
   assert.equal(await trust.ensure(path.join(projects, 'App')), false); // already trusted
+
+  // A folder reached through a symlink is recorded under its real path, where Claude Code looks.
+  mkdirSync(path.join(projects, 'Real'));
+  symlinkSync(path.join(projects, 'Real'), path.join(base, 'shortcut'));
+  assert.equal(await trust.ensure(path.join(base, 'shortcut')), true);
+  config = JSON.parse(readFileSync(configFile, 'utf8'));
+  assert.equal(config.projects[path.join(projects, 'Real')].hasTrustDialogAccepted, true);
+  assert.equal(config.projects[path.join(base, 'shortcut')], undefined);
 
   assert.equal(await trust.ensure(path.join(base, 'Other')), false);
   assert.equal(await trust.ensure(path.join(projects, '..', 'Other')), false); // no escaping the root
