@@ -248,8 +248,10 @@ test('setup reuses a Funnel that already points at Do-It instead of asking for a
   const own = { ok: true, code: 0, stderr: '', stdout: JSON.stringify({ TCP: { 443: { HTTPS: true } }, Web: { [`${DNS}:443`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:8787' } } } } }) };
   const m = machine({ serve: own });
   const said = [];
-  const { asked, ask } = scripted(['', '', '', 'n', 'Iv1.manual1', 'manual-secret-1']); // no address question
-  await runSetup({ configDir: path.join(dir, 'config'), ask, exec: m.exec, home: dir, say: l => said.push(l) });
+  let tried = 0;
+  const { asked, ask } = scripted(['', '', 'n', 'Iv1.manual1', 'manual-secret-1']); // folder, login, no one-click app; no address question
+  await runSetup({ configDir: path.join(dir, 'config'), ask, exec: m.exec, createApp: async () => { tried++; throw new Error('not expected'); }, home: dir, say: l => said.push(l) });
+  assert.equal(tried, 0);
   assert.match(said.join('\n'), new RegExp(`Funnel already forwards https://${DNS} to Do-It on port 8787; using it`));
   assert.equal(json(path.join(dir, 'config'), 'config.json').publicUrl, `https://${DNS}`);
   assert.equal(asked.some(([q]) => /Public https address/.test(q)), false);
