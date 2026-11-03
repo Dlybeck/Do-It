@@ -182,7 +182,8 @@ function installMachine({ claudeOk = true, loggedIn = true } = {}) {
     if (command === 'loginctl') { m.calls.push([command, ...args]); return { ok: true, code: 0, stdout: 'no', stderr: '' }; }
     return m.exec(command, args);
   };
-  const fs = { exists: f => f in files || (f.startsWith(tmpdir()) && existsSync(f)), read: f => files[f], write: (f, c) => { files[f] = c; }, remove: f => { delete files[f]; } };
+  // The settings are real files; the service file only ever exists in `files`.
+  const fs = { exists: f => f in files || existsSync(f), read: f => files[f], write: (f, c) => { files[f] = c; }, remove: f => { delete files[f]; } };
   const fetchImpl = async url => {
     const u = String(url);
     if (u.endsWith('/.well-known/oauth-protected-resource')) return Response.json({ resource: `https://${DNS}/mcp` });
