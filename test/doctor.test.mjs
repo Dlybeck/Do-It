@@ -84,6 +84,7 @@ const BROKEN = [
   ['an address that isn\'t Do-It', { net: { [`${PUBLIC}/.well-known/oauth-protected-resource`]: () => Response.json({ resource: 'https://else.example/mcp' }) } }, /answers, but as https:\/\/else\.example\/mcp/],
   ['an address with an error status', { net: { [`${PUBLIC}/.well-known/oauth-protected-resource`]: () => new Response('bad gateway', { status: 502 }) } }, /answered HTTP 502[\s\S]*isn't forwarding/],
   ['a tunnel that only forwards /mcp', { net: { [`${PUBLIC}/oauth/github/callback?state=doctor`]: () => new Response('nope', { status: 404 }) } }, /oauth\/github\/callback doesn't reach Do-It[\s\S]*every path/],
+  ['an unknown GitHub client ID', { net: { 'https://github.com/login/oauth/access_token': () => Response.json({ error: 'Not Found' }, { status: 404 }) } }, /GitHub doesn't recognise the client ID[\s\S]*client ID from your GitHub app's settings/],
   ['a wrong GitHub secret', { creds: 'incorrect_client_credentials' }, /GitHub rejects the client ID or secret[\s\S]*new client secret is fine/],
 ];
 for (const [label, options, expected] of BROKEN) {

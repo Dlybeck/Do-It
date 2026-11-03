@@ -120,7 +120,8 @@ export async function doctor(inst, { exec = run, fs = realFs, fetchImpl = fetch,
           body: new URLSearchParams({ client_id: github.clientId, client_secret: github.clientSecret, code: 'do-it-doctor-check' }),
         });
         const { error } = await response.json();
-        if (error === 'bad_verification_code') add(ok('GitHub accepts the app\'s client ID and secret'));
+        if (response.status === 404) add(fail("GitHub doesn't recognise the client ID in github.json", `Copy the client ID from your GitHub app's settings page, then run ${command('setup')}.`));
+        else if (error === 'bad_verification_code') add(ok('GitHub accepts the app\'s client ID and secret'));
         else if (error === 'incorrect_client_credentials') add(fail('GitHub rejects the client ID or secret in github.json', `Copy them again from your GitHub app's settings (a new client secret is fine), then run ${command('setup')}.`));
         else add(warn(`Couldn't confirm the client ID and secret with GitHub (${error ?? 'no answer'})`));
       } catch { add(warn("Couldn't reach github.com to confirm the client ID and secret")); }

@@ -103,11 +103,9 @@ test('without Tailscale or gh it asks for the address and login, and mentions th
   const dir = home();
   const m = machine({ gh: null, tailscale: null });
   const said = [];
-  const { asked } = scripted([]);
   const answers = scripted(['', 'octocat', 'https://tunnel.example.net', 'n', 'Iv1.manual1', 'manual-secret-1']);
   await runSetup({ configDir: path.join(dir, 'config'), ask: answers.ask, exec: m.exec, home: dir, say: l => said.push(l) });
   assert.match(said.join('\n'), /Cloudflare Tunnel, ngrok or Caddy.*127\.0\.0\.1:8787/);
-  assert.equal(asked.length, 0);
   assert.match(answers.asked[1][0], /^GitHub login\(s\) \(comma-separated\): $/); // no guess to offer
   assert.deepEqual(json(path.join(dir, 'config'), 'github.json'), { clientId: 'Iv1.manual1', clientSecret: 'manual-secret-1', allowedLogins: ['octocat'] });
   assert.deepEqual(answers.asked.at(-1), ['OAuth app client secret: ', true]);
