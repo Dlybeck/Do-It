@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 // do-it: run the server, set it up, or install it as a background service.
 //   do-it [start]            run the server in the foreground
-//   do-it setup              ask for settings and write config.json and github.json
+//   do-it setup              guided: folders, login, public address, sign-in app
 //   do-it add-folder <path>  allow another folder (a running server picks it up in seconds)
-//   do-it install            set up if needed, then install and start the background service
+//   do-it install            check this machine, set up if needed, install and start the service, then doctor
+//   do-it doctor             check the whole setup and print the fix for anything wrong
 //   do-it uninstall          stop the service and remove what install created
 //   do-it status             show whether the service is installed, running and answering
 //   do-it service            print a systemd unit (Linux) or launchd plist (macOS)
 // Options for any command: --name <name> (default do-it), --config-dir <dir>, --state-dir <dir>,
-// --port <port>, --claude-bin <path>. A --name other than do-it gets its own folders, so a
+// --port <port>, --claude-bin <path>. --manual-github (setup, install) skips the one-click sign-in app
+// creation and asks for the client ID and secret instead. A --name other than do-it gets its own folders, so a
 // second instance can run next to the first on another --port.
 import { parseArgs } from 'node:util';
 
@@ -17,7 +19,7 @@ let parsed;
 try {
   parsed = parseArgs({
     allowPositionals: true,
-    options: { name: { type: 'string' }, 'config-dir': { type: 'string' }, 'state-dir': { type: 'string' }, port: { type: 'string' }, 'claude-bin': { type: 'string' } },
+    options: { name: { type: 'string' }, 'config-dir': { type: 'string' }, 'state-dir': { type: 'string' }, port: { type: 'string' }, 'claude-bin': { type: 'string' }, 'manual-github': { type: 'boolean' } },
   });
 } catch (error) { fail(error.message); }
 const { values: flags, positionals } = parsed;
@@ -32,10 +34,11 @@ Object.assign(process.env, { DO_IT_CONFIG_DIR: inst.configDir, DO_IT_STATE_DIR: 
 if (flags['claude-bin']) process.env.DO_IT_CLAUDE_BIN = flags['claude-bin'];
 const claude = flags['claude-bin'];
 
-async function setup(configDir) {
-  const { runSetup, terminalAsker } = await import('../src/cli.mjs');
+const manualGithub = flags['manual-github'] === true;
+async function asking(fn) {
+  const { terminalAsker } = await import('../src/cli.mjs');
   const asker = terminalAsker();
-  try { await runSetup({ configDir, ask: asker.ask }); } finally { asker.close(); }
+  try { return await fn(asker.ask); } finally { asker.close(); }
 }
 
 try {
@@ -45,9 +48,11 @@ try {
       main();
       break;
     }
-    case 'setup':
-      await setup(inst.configDir);
+    case 'setup': {
+      const { runSetup } = await import('../src/guided.mjs');
+      await asking(ask => runSetup({ configDir: inst.configDir, ask, port: inst.port, manualGithub }));
       break;
+    }
     case 'add-folder': {
       if (rest.length !== 1) fail('Usage: do-it add-folder <path>');
       const { addFolder } = await import('../src/cli.mjs');
@@ -55,8 +60,15 @@ try {
       break;
     }
     case 'install': {
-      const { install } = await import('../src/install.mjs');
-      await install(inst, { setup, claude });
+      const { guidedInstall } = await import('../src/guided.mjs');
+      const report = await asking(ask => guidedInstall(inst, { ask, claude, manualGithub }));
+      if (!report.ok) process.exitCode = 1;
+      break;
+    }
+    case 'doctor': {
+      const { doctor } = await import('../src/doctor.mjs');
+      const report = await doctor(inst, { claude });
+      if (!report.ok) process.exitCode = 1;
       break;
     }
     case 'uninstall': {
@@ -78,6 +90,6 @@ try {
       break;
     }
     default:
-      fail('Usage: do-it [start | setup | add-folder <path> | install | uninstall | status | service] [--name <name>] [--port <port>] [--config-dir <dir>] [--state-dir <dir>] [--claude-bin <path>]');
+      fail('Usage: do-it [start | setup | add-folder <path> | install | doctor | uninstall | status | service] [--name <name>] [--port <port>] [--config-dir <dir>] [--state-dir <dir>] [--claude-bin <path>] [--manual-github]');
   }
 } catch (error) { fail(error.message); }

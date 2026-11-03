@@ -158,7 +158,7 @@ export async function probe(port, { fetchImpl = fetch } = {}) {
 }
 
 // Whether the service definition exists, and whether install made it.
-function owned(p, { exec, fs }) {
+export function owned(p, { exec, fs }) {
   if (p.registered) {
     return exec(...p.registered).then(r => ({ exists: r.ok, ours: r.ok && r.stdout.includes(MARKER) }));
   }
@@ -181,7 +181,7 @@ async function runAll(commands, exec, say) {
   }
 }
 
-const realFs = {
+export const realFs = {
   exists: existsSync,
   read: file => readFileSync(file, 'utf8'),
   write: (file, content, encoding) => {

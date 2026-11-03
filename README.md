@@ -14,79 +14,95 @@ login, your settings and your files. Do-It itself has no model access.
 > and can't be turned off. Keep the allowlist narrow, and only allow GitHub accounts you
 > control.
 
-## Requirements
+## Quick start
 
-- **Linux or macOS** with Node.js 22 or newer. Windows is not yet supported; see
-  [Platforms](#platforms).
-- Claude Code CLI, signed in with `claude auth login`. It must support background sessions
-  (`claude --bg`, `claude agents`, `claude stop`).
-- A public **HTTPS** address on **port 443** that forwards to Do-It. claude.ai only
-  connects to remote MCP servers on port 443.
-- A GitHub account. Do-It uses a GitHub OAuth App to sign you in.
+You need Linux or macOS, Node.js 22 or newer, and Claude Code signed in (`claude auth login`).
 
-## Setup
+```sh
+git clone https://github.com/Dlybeck/Do-It.git && cd Do-It && npm ci && npm link
+do-it install    # guided: folders, GitHub login, public address, GitHub app, service, then a check
+```
 
-1. **Get the code.**
+Then in claude.ai, add `<your address>/mcp` as a custom connector (Settings → Connectors) and
+sign in with GitHub. `do-it doctor` re-checks the whole setup at any time.
+[Setup in detail](#setup-in-detail) explains each step. Windows is not yet supported; see
+[Platforms](#platforms).
 
-   ```sh
-   git clone https://github.com/Dlybeck/Do-It.git && cd Do-It
-   npm ci && npm link    # puts `do-it` on your PATH; or run `node bin/do-it.mjs`
-   ```
+## Setup in detail
 
-2. **Give it a public HTTPS address.** With [Tailscale Funnel](https://tailscale.com/kb/1223/funnel):
+### What you need
 
-   ```sh
-   tailscale funnel --bg --https=443 http://127.0.0.1:8787
-   ```
+- **Linux or macOS** with Node.js 22 or newer.
+- **Claude Code CLI**, signed in with `claude auth login`. It must support background
+  sessions (`claude --bg`, `claude agents`, `claude stop`).
+- **A public HTTPS address on port 443** that forwards to Do-It, because claude.ai only
+  connects to remote MCP servers on port 443. [Tailscale Funnel](https://tailscale.com/kb/1223/funnel)
+  is the easiest: `install` finds your `*.ts.net` name and offers to turn Funnel on. Any
+  tunnel or reverse proxy that serves a public hostname and forwards to `127.0.0.1:8787`
+  also works, for example Cloudflare Tunnel, ngrok, or Caddy on a server you own.
+- **A GitHub account.** Do-It uses a GitHub app to sign you in. `install` creates it for you.
 
-   Your address is `https://<machine>.<tailnet>.ts.net`, and your tailnet policy must allow
-   Funnel for this machine. Any HTTPS tunnel or reverse proxy that serves a public hostname
-   on port 443 and forwards to `127.0.0.1:8787` also works, for example Cloudflare Tunnel,
-   ngrok, or Caddy on a server you own. If port 443 on this machine is already used by
-   something else, `deploy/tailscale/serve.json` is a serve config for running Funnel from
-   a separate Tailscale node in the official container.
+### What `do-it install` does
 
-3. **Install it as a background service.**
+`do-it install` is the one command. It asks a few questions, shows what it found, and
+writes `~/.config/do-it/config.json` and `github.json` (readable only by you). In order:
 
-   ```sh
-   do-it install
-   ```
+1. **Checks this machine:** Node.js, the `claude` CLI, `claude auth status`, and background
+   session support. If something is wrong, it says exactly what to run and stops before
+   asking anything.
+2. **Folders.** The only places Do-It can reach. It suggests your projects folder (the first
+   of `~/Projects`, `~/code`, `~/src` and similar that exists), and never your whole home
+   folder unless you type it.
+3. **GitHub login.** Only these accounts can sign in. It fills in your login from `gh` if
+   `gh` is installed and signed in.
+4. **Public address.** If Tailscale is running and allows Funnel, it offers to run
+   `tailscale funnel --bg --https=443 http://127.0.0.1:8787` for you. It won't if this
+   machine already serves something through Tailscale, because that would replace it. Without
+   Tailscale it asks for your address.
+5. **GitHub app.** It offers to create the app with GitHub's app-manifest flow: it prints a
+   link, you open it in a browser signed in to GitHub (any device), click **Create GitHub
+   App** once, and Do-It receives the client ID and secret itself. If that can't run (the
+   address doesn't reach this machine yet, or GitHub refuses), or with `--manual-github`, it
+   falls back to a prefilled form: open the printed link, register the app, and paste the
+   client ID and secret back. The app needs **Homepage URL** = your address and
+   **Callback URL** = `<your address>/oauth/github/callback`.
+6. **Service.** A service that runs as you and starts at login: a systemd user unit
+   (`~/.config/systemd/user/do-it.service`) on Linux, a launchd agent
+   (`~/Library/LaunchAgents/do-it.plist`) on macOS. On Linux, to keep it running while you're
+   logged out, run `sudo loginctl enable-linger $USER`. `install` prints that line but never
+   runs sudo itself.
+7. **`do-it doctor`.** See below.
 
-   If there are no settings yet, this runs `do-it setup` first. Setup asks for:
-   - the folders Do-It may use
-   - the GitHub login(s) allowed to sign in
-   - your public address
-   - the details of a GitHub OAuth App
+`install` is safe to run again, for example after moving or reinstalling `claude`: it keeps
+your settings, rewrites its own service file and restarts the service. `do-it setup` runs
+just the questions (steps 2 to 5). `do-it status` shows whether the service is installed,
+running and answering. `do-it uninstall` stops it and removes only what `install` created;
+your settings and sign-in state stay. `install` and `uninstall` never touch a service of the
+same name that they didn't create. To run Do-It in the foreground instead, use
+`do-it start`.
 
-   To get the OAuth App details, setup tells you what to enter at
-   <https://github.com/settings/developers> → **New OAuth App**:
-   - **Homepage URL:** your address
-   - **Authorization callback URL:** `<your address>/oauth/github/callback`
+### `do-it doctor`
 
-   Leave device flow off, and paste the client ID and a new client secret back into setup.
-   Setup writes `~/.config/do-it/config.json` and `github.json`, readable only by you.
+Checks the whole setup and, for each problem, prints the exact fix (a command to run or a
+file to change):
 
-   Then `install` sets up a service that runs as you and starts at login. It checks that
-   Do-It answers on `127.0.0.1:8787`.
-   - **Linux:** a systemd user unit in `~/.config/systemd/user/do-it.service`, enabled and
-     started. To keep it running while you're logged out, run
-     `sudo loginctl enable-linger $USER`; `install` reminds you if that's needed, but it
-     never runs sudo itself.
-   - **macOS:** a launchd agent in `~/Library/LaunchAgents/do-it.plist`, loaded with
-     `launchctl bootstrap`. launchd starts programs with a minimal PATH, so the agent names
-     `node` and the `claude` CLI by their full paths. Logs go to `~/Library/Logs/do-it.log`.
+- Node.js, the `claude` CLI, its login and its background-session support
+- `config.json` and `github.json`, and that every allowed folder exists
+- the service: installed, running, and answering on `127.0.0.1:8787` as this Do-It
+- the public address: that `https://<your address>` reaches this Do-It, and that the GitHub
+  sign-in callback path goes through your tunnel too
+- that GitHub accepts the client ID and secret in `github.json`
 
-   `install` is safe to run again, for example after moving or reinstalling `claude`: it
-   rewrites its own service file and restarts the service. `do-it status` shows whether the
-   service is installed, running and answering. `do-it uninstall` stops it and removes only
-   what `install` created; your settings and sign-in state stay. `install` and `uninstall`
-   never touch a service of the same name that they didn't create. To run Do-It in the
-   foreground instead, use `do-it start`.
+When everything passes it prints the connector URL and the Callback URL the GitHub app must
+have. It exits with a failure code when something needs fixing. Notes (for example,
+`enable-linger` still to do) don't fail it.
 
-4. **Connect.** In claude.ai, go to **Settings → Connectors → Add custom connector** and
-   enter `<your address>/mcp`. Leave the OAuth client fields empty. You'll sign in with
-   GitHub, then approve the client on Do-It's own page. That page only appears the first
-   time a client connects; approve it only if you just clicked Connect yourself.
+### Connect
+
+In claude.ai, go to **Settings → Connectors → Add custom connector** and enter
+`<your address>/mcp`. Leave the OAuth client fields empty. You'll sign in with GitHub, then
+approve the client on Do-It's own page. That page only appears the first time a client
+connects; approve it only if you just clicked Connect yourself.
 
 ### A second instance
 
@@ -95,7 +111,7 @@ folders (`~/.config/<name>`, `~/.local/state/<name>`), so give it its own `--por
 
 ```sh
 do-it install --name do-it-test --port 8788
-do-it status --name do-it-test --port 8788
+do-it doctor --name do-it-test --port 8788
 do-it uninstall --name do-it-test --port 8788
 ```
 

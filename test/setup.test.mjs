@@ -4,13 +4,16 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { addFolder, runSetup } from '../src/cli.mjs';
+import { addFolder } from '../src/cli.mjs';
+import { runSetup } from '../src/guided.mjs';
 import { watchConfig } from '../src/config.mjs';
 import { Sessions } from '../src/sessions.mjs';
 
 const fresh = () => realpathSync(mkdtempSync(path.join(tmpdir(), 'do-it-setup-')));
 const json = (dir, file) => JSON.parse(readFileSync(path.join(dir, file), 'utf8'));
 const mode = file => statSync(file).mode & 0o777;
+// No gh, no Tailscale: every outside command fails, so setup asks for everything.
+const nothing = async () => ({ ok: false, code: 1, stdout: '', stderr: 'not installed' });
 const scripted = answers => {
   const asked = [];
   return { asked, ask: async (q, options = {}) => { asked.push([q, options.secret === true]); return answers.shift() ?? ''; } };
@@ -25,10 +28,11 @@ test('setup writes both files with owner-only modes, re-asking after bad answers
     '/', 'relative', code,                        // folders: two bad answers first
     'bad login!', 'octocat, hubot',               // logins
     'http://insecure.example', 'https://your-host.example.ts.net/', // url (trailing slash is trimmed)
-    'Iv1.abcdef123', 'secret-value-123',          // OAuth app
+    'n',                                          // don't create the app automatically
+    'x', 'Iv1.abcdef123', 'secret-value-123',     // OAuth app (a bad client ID first)
   ]);
   const said = [];
-  await runSetup({ configDir, ask, say: line => said.push(line) });
+  await runSetup({ configDir, ask, exec: nothing, home: base, say: line => said.push(line) });
   assert.deepEqual(json(configDir, 'config.json'), { publicUrl: 'https://your-host.example.ts.net', allowedRoots: [code] });
   assert.deepEqual(json(configDir, 'github.json'), { clientId: 'Iv1.abcdef123', clientSecret: 'secret-value-123', allowedLogins: ['octocat', 'hubot'] });
   assert.equal(mode(configDir), 0o700);
@@ -46,11 +50,11 @@ test('re-running setup keeps current values on empty answers and moves trustedRo
   mkdirSync(code);
   writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ trustedRoots: [code], publicUrl: 'https://old.example', allowBypassPermissions: true }));
   writeFileSync(path.join(configDir, 'github.json'), JSON.stringify({ clientId: 'Iv1.keepme', clientSecret: 'keep-this-secret', allowedLogins: ['octocat'] }));
-  const { ask, asked } = scripted(['', '', 'https://new.example', '', '']);
-  await runSetup({ configDir, ask, say: () => {} });
+  const { ask, asked } = scripted(['', '', 'https://new.example', '']); // keep folders, login, GitHub app; new address
+  await runSetup({ configDir, ask, exec: nothing, home: configDir, say: () => {} });
   assert.deepEqual(json(configDir, 'config.json'), { publicUrl: 'https://new.example', allowBypassPermissions: true, allowedRoots: [code] });
   assert.equal(json(configDir, 'github.json').clientSecret, 'keep-this-secret');
-  assert.match(asked.at(-1)[0], /\[keep current\]/); // the secret itself is never shown
+  assert.match(asked.at(-1)[0], /Keep the GitHub app already set up \(client ID Iv1\.keepme\)/); // the secret itself is never shown
 });
 
 test('add-folder adds existing folders once and refuses bad ones', () => {
