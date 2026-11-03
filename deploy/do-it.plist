@@ -8,7 +8,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>do-it</string>
+  <string>{{LABEL}}</string>
   <key>ProgramArguments</key>
   <array>
     <string>{{NODE}}</string>
@@ -23,14 +23,14 @@
     <string>{{PATH}}</string>
     <key>DO_IT_CLAUDE_BIN</key>
     <string>{{CLAUDE_BIN}}</string>
-  </dict>
+{{EXTRA_ENV}}  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>{{HOME}}/Library/Logs/do-it.log</string>
+  <string>{{HOME}}/Library/Logs/{{LABEL}}.log</string>
   <key>StandardErrorPath</key>
-  <string>{{HOME}}/Library/Logs/do-it.log</string>
+  <string>{{HOME}}/Library/Logs/{{LABEL}}.log</string>
 </dict>
 </plist>
