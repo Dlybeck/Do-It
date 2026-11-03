@@ -1,7 +1,7 @@
 # systemd user unit for Do-It. "do-it service" prints this with the paths filled in:
 #   do-it service > ~/.config/systemd/user/do-it.service
 [Unit]
-Description=Do-It MCP server for remote Claude Code control ({{LABEL}})
+Description=Do-It MCP server for remote Claude Code control{{LABEL_SUFFIX}}
 After=network-online.target
 
 [Service]

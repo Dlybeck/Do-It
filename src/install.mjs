@@ -14,7 +14,8 @@ import { findClaude } from './claude.mjs';
 import { loadConfig } from './config.mjs';
 import { APP_DIR, escapes, serviceFile } from './service.mjs';
 
-export const MARKER = 'Installed by "do-it install"; "do-it uninstall" removes it.';
+// No quotes or markup, so it reads back the same from every format (XML exports escape quotes).
+export const MARKER = 'Installed by do-it install; do-it uninstall removes it.';
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 const DEFAULT_PORT = 8787;
 
@@ -54,6 +55,8 @@ export function plan(inst, { platform = process.platform, home = homedir(), uid 
       uninstall: [['systemctl', ['--user', 'disable', '--now', unit]]],
       afterRemove: [['systemctl', ['--user', 'daemon-reload']]],
       status: ['systemctl', ['--user', 'show', unit, '-p', 'LoadState', '-p', 'ActiveState', '-p', 'SubState', '-p', 'MainPID']],
+      // A unit of this name loaded from another file (a vendor or hand-made unit) isn't ours to replace.
+      loadedFrom: async exec => { const r = await exec('systemctl', ['--user', 'show', unit, '-p', 'LoadState', '-p', 'FragmentPath']); const loaded = /LoadState=loaded/.test(r.stdout); return loaded ? (r.stdout.match(/FragmentPath=(.*)/)?.[1] || undefined) : undefined; },
       linger: ['loginctl', ['show-user', user, '-p', 'Linger', '--value']],
     };
   }
@@ -65,10 +68,12 @@ export function plan(inst, { platform = process.platform, home = homedir(), uid 
     return {
       kind: 'launchd agent', file, content,
       // bootout first (allowed to fail when not loaded) so a re-run picks up the new file.
-      install: [['launchctl', ['bootout', target], { mayFail: true }], ['launchctl', ['bootstrap', `gui/${uid}`, file]]],
+      // launchd can still be tearing the old job down right after bootout, so bootstrap retries briefly.
+      install: [['launchctl', ['bootout', target], { mayFail: true }], ['launchctl', ['bootstrap', `gui/${uid}`, file], { retries: 10 }]],
       uninstall: [['launchctl', ['bootout', target], { mayFail: true }]],
       afterRemove: [],
       status: ['launchctl', ['print', target]],
+      loadedFrom: async exec => { const r = await exec('launchctl', ['print', target]); return r.ok ? (r.stdout.match(/^\s*path = (.*)$/m)?.[1] ?? 'an unknown file') : undefined; },
     };
   }
   if (platform === 'win32') {
@@ -87,6 +92,8 @@ export function plan(inst, { platform = process.platform, home = homedir(), uid 
 
 // Task Scheduler XML: at logon, hidden, restarts on failure, no time limit, runs node directly
 // with the instance's settings as arguments (tasks can't set environment variables).
+// RestartOnFailure covers a task that fails to start; Task Scheduler doesn't restart one whose
+// process exits later (README, Platforms).
 export function taskXml(inst, { node, appDir, claude, user }) {
   const quote = value => {
     if (/["\r\n]/.test(value)) throw new Error(`Can't put a path containing quotes or line breaks in a Windows task: ${value}`);
@@ -159,9 +166,16 @@ function owned(p, { exec, fs }) {
   return Promise.resolve({ exists, ours: exists && fs.read(p.file).includes(MARKER) });
 }
 
+let retryDelay = 500;
+export const setRetryDelay = ms => { retryDelay = ms; };
+
 async function runAll(commands, exec, say) {
-  for (const [command, args, { mayFail = false } = {}] of commands) {
-    const result = await exec(command, args);
+  for (const [command, args, { mayFail = false, retries = 0 } = {}] of commands) {
+    let result = await exec(command, args);
+    for (let attempt = 0; !result.ok && attempt < retries; attempt++) {
+      await new Promise(r => setTimeout(r, retryDelay));
+      result = await exec(command, args);
+    }
     if (!result.ok && !mayFail) throw new Error(`${command} ${args.join(' ')} failed: ${result.stderr || result.stdout || `exit ${result.code}`}`);
     if (result.ok) say(`  ran: ${command} ${args.join(' ')}`);
   }
@@ -186,9 +200,14 @@ export async function install(inst, { exec = run, fs = realFs, say = console.log
     say(`No settings in ${inst.configDir} yet; starting setup.`);
     await setup(inst.configDir);
   }
-  loadConfig(inst.configDir, {}); // the service won't see this shell's environment, so check the files alone
+  // The service won't see this shell's environment, so check the files alone.
+  const expected = `${loadConfig(inst.configDir, {}).baseUrl}/mcp`;
   const p = plan(inst, options);
   const state = await owned(p, { exec, fs });
+  if (!state.exists && p.loadedFrom) {
+    const other = await p.loadedFrom(exec);
+    if (other && other !== p.file) throw new Error(`A service named ${inst.name} is already loaded from ${other}. Install under another --name.`);
+  }
   const what = p.registered ? `Task "${inst.name}"` : p.file;
   if (state.exists && !state.ours) throw new Error(`${what} already exists and wasn't created by do-it install. Remove it yourself, or install under another --name.`);
   if (!state.exists && (await isPortOpen(inst.port))) throw new Error(`Something is already listening on 127.0.0.1:${inst.port}. Pick another --port.`);
@@ -199,12 +218,17 @@ export async function install(inst, { exec = run, fs = realFs, say = console.log
     const linger = await exec(...p.linger);
     if (linger.ok && linger.stdout === 'no') say(`Note: to keep ${inst.name} running while you're logged out, run: sudo loginctl enable-linger ${p.linger[1][1]}`);
   }
+  // Wait for this instance, recognised by its own public URL, not just anything on the port.
   let resource;
-  for (const started = Date.now(); !resource && Date.now() - started < wait;) {
+  for (const started = Date.now(); resource !== expected && Date.now() - started < wait;) {
     resource = await probeImpl(inst.port);
-    if (!resource) await new Promise(r => setTimeout(r, 500));
+    if (resource !== expected) await new Promise(r => setTimeout(r, 500));
   }
-  if (!resource) throw new Error(`${inst.name} was installed but isn't answering on 127.0.0.1:${inst.port}. Check its logs (do-it status --name ${inst.name}).`);
+  if (resource !== expected) {
+    throw new Error(resource
+      ? `Port ${inst.port} answers as ${resource}, which is another Do-It, not ${inst.name} (${expected}). Pick another --port.`
+      : `${inst.name} was installed but isn't answering on 127.0.0.1:${inst.port}. Check its logs (do-it status --name ${inst.name} --port ${inst.port}).`);
+  }
   say(`${inst.name} is running on 127.0.0.1:${inst.port}; connector URL ${resource}`);
   return { file: p.file, resource };
 }
@@ -227,8 +251,11 @@ export async function status(inst, { exec = run, fs = realFs, say = console.log,
   const state = await owned(p, { exec, fs });
   const service = await exec(...p.status);
   const resource = await probeImpl(inst.port);
+  let expected;
+  try { expected = `${loadConfig(inst.configDir, {}).baseUrl}/mcp`; } catch { /* no usable config: can't tell whose server it is */ }
+  const ours = Boolean(resource) && (!expected || resource === expected);
   say(`${inst.name}: ${state.exists ? (state.ours ? `installed (${p.kind}, ${p.file})` : `present but not installed by do-it (${p.file})`) : 'not installed'}`);
   if (service.ok) say(service.stdout.split('\n').filter(l => /State|PID|Status|state =|pid =|Last Result|Next Run/i.test(l)).map(l => `  ${l.trim()}`).join('\n'));
-  say(`  127.0.0.1:${inst.port}: ${resource ? `answering (${resource})` : 'not answering'}`);
-  return { installed: state.exists && state.ours, answering: Boolean(resource) };
+  say(`  127.0.0.1:${inst.port}: ${!resource ? 'not answering' : ours ? `answering (${resource})` : `answering as ${resource}, a different Do-It; is --port right?`}`);
+  return { installed: state.exists && state.ours, answering: ours };
 }

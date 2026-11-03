@@ -71,7 +71,10 @@ try {
     }
     case 'service': {
       const { serviceFile } = await import('../src/service.mjs');
-      process.stdout.write(serviceFile({ claude }));
+      // With no instance options this prints the plain default unit, as before.
+      const custom = flags.name || flags.port || flags['config-dir'] || flags['state-dir'];
+      const extraEnv = custom ? { DO_IT_CONFIG_DIR: inst.configDir, DO_IT_STATE_DIR: inst.stateDir, DO_IT_PORT: String(inst.port) } : {};
+      process.stdout.write(serviceFile({ claude, label: inst.name, extraEnv }));
       break;
     }
     default:

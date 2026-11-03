@@ -269,8 +269,9 @@ doesn't reach Claude Code's background sessions.
   and an npm `claude.cmd` install is run without a shell, by finding the script or `.exe`
   the shim wraps. If that fails, set `DO_IT_CLAUDE_BIN` to `claude.exe` or to the CLI's
   `.js` file. `do-it install` would register a hidden Task Scheduler task that runs at
-  logon and restarts on failure. That path has only been tested against generated files,
-  never on a real Windows machine. The optional role-context hook is plain Node.js and needs no changes there.
+  logon and restarts on failure. Task Scheduler only restarts a task that fails to start, not
+  one that exits later, so a crashed server stays down until the next logon. That path has
+  only been tested against generated files, never on a real Windows machine. The optional role-context hook is plain Node.js and needs no changes there.
 
 ## Configuration reference
 

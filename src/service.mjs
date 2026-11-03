@@ -24,7 +24,7 @@ export function serviceFile({ platform = process.platform, env = process.env, no
   const claudeBin = claude ?? findClaude({ env, platform });
   if (!claudeBin) throw new Error('Could not find the claude CLI on PATH. Install it, or set DO_IT_CLAUDE_BIN to its full path, then run this again.');
   const dirs = [path.dirname(node), path.dirname(claudeBin), ...(platform === 'darwin' ? ['/opt/homebrew/bin'] : []), '/usr/local/bin', '/usr/bin', '/bin'];
-  const values = { NODE: node, APP_DIR: appDir, CLAUDE_BIN: claudeBin, HOME: home, LABEL: label, PATH: [...new Set(dirs)].join(':') };
+  const values = { NODE: node, APP_DIR: appDir, CLAUDE_BIN: claudeBin, HOME: home, LABEL: label, LABEL_SUFFIX: label === 'do-it' ? '' : ` (${label})`, PATH: [...new Set(dirs)].join(':') };
   const extra = Object.entries(extraEnv).map(([key, value]) => envLines[platform](key, value, escape)).join('');
   const template = readFileSync(path.join(APP_DIR, 'deploy', platform === 'darwin' ? 'do-it.plist' : 'do-it.service'), 'utf8');
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => (key === 'EXTRA_ENV' ? extra : escape(values[key])));

@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { MARKER, install, instance, plan, status, uninstall } from '../src/install.mjs';
+import { MARKER, install, instance, plan, setRetryDelay, status, uninstall } from '../src/install.mjs';
+
+setRetryDelay(1);
 
 const HOME = '/home/me';
 const CONFIG = { 'config.json': JSON.stringify({ publicUrl: 'https://x.example', allowedRoots: ['/home/me/code'] }), 'github.json': JSON.stringify({ clientId: 'id', clientSecret: 'secret', allowedLogins: ['me'] }) };
@@ -23,7 +25,7 @@ function machine({ files = {}, answers = () => ({ ok: true, stdout: '' }), portO
   };
   const calls = [];
   const exec = async (command, args) => { calls.push([command, ...args]); return { code: 0, stderr: '', ...answers(command, args) }; };
-  return { fs, calls, exec, say: () => {}, isPortOpen: async () => portOpen, probeImpl: async port => (answering ? `https://x.example/mcp (port ${port})` : undefined), wait: 50 };
+  return { fs, calls, exec, say: () => {}, isPortOpen: async () => portOpen, probeImpl: async () => (answering === true ? 'https://x.example/mcp' : answering || undefined), wait: 50 };
 }
 const withConfig = dir => Object.fromEntries(Object.entries(CONFIG).map(([f, c]) => [path.join(dir, f), c]));
 const common = { home: HOME, uid: 501, user: 'me', node: '/usr/bin/node', appDir: '/opt/do-it', claude: '/home/me/.local/bin/claude', env: {} };
@@ -58,6 +60,7 @@ test('Linux: a marked systemd user unit with the instance settings, enabled and 
   assert.match(unit, /^Environment="DO_IT_STATE_DIR=\/home\/me\/\.local\/state\/do-it-test"$/m);
   assert.match(unit, /^Environment="DO_IT_CLAUDE_BIN=\/home\/me\/\.local\/bin\/claude"$/m);
   assert.deepEqual(m.calls, [
+    ['systemctl', '--user', 'show', 'do-it-test.service', '-p', 'LoadState', '-p', 'FragmentPath'],
     ['systemctl', '--user', 'daemon-reload'], ['systemctl', '--user', 'enable', 'do-it-test.service'], ['systemctl', '--user', 'restart', 'do-it-test.service'],
     ['loginctl', 'show-user', 'me', '-p', 'Linger', '--value'],
   ]);
@@ -93,7 +96,8 @@ test('install refuses a busy port, missing settings, and a server that never ans
   const inst = instance({ name: 'x', port: 8788, configDir: realConfigDir(), home: HOME });
   const busy = machine({ portOpen: true });
   await assert.rejects(install(inst, { ...busy, ...common, platform: 'linux' }), /already listening on 127\.0\.0\.1:8788/);
-  assert.deepEqual(busy.calls, []);
+  assert.deepEqual(busy.calls.filter(c => c[2] !== 'show'), []); // only the read-only lookup ran
+  assert.deepEqual(Object.keys(busy.fs.files).filter(f => !f.startsWith(tmpdir())), []);
   const empty = instance({ name: 'y', port: 8788, configDir: mkdtempSync(path.join(tmpdir(), 'do-it-empty-')), home: HOME });
   await assert.rejects(install(empty, { ...machine(), ...common, platform: 'linux' }), /No config\.json or github\.json .* Run "do-it setup" first/);
   let setupRan = false;
@@ -105,16 +109,16 @@ test('install refuses a busy port, missing settings, and a server that never ans
 
 test('macOS: a marked LaunchAgent with full paths, bootstrapped into the gui domain', async () => {
   const inst = instance({ name: 'do-it', configDir: realConfigDir(), home: HOME });
-  const m = machine({ answers: (c, a) => (a[0] === 'bootout' ? { ok: false, code: 3, stderr: 'No such process' } : { ok: true, stdout: '' }) });
+  const m = machine({ answers: (c, a) => (a[0] === 'bootout' || a[0] === 'print' ? { ok: false, code: 3, stderr: 'No such process' } : { ok: true, stdout: '' }) });
   await install(inst, { ...m, ...common, platform: 'darwin' });
   const file = '/home/me/Library/LaunchAgents/do-it.plist';
   const plist = m.fs.files[file];
-  assert.match(plist, /^<\?xml[^\n]*\n<!-- Installed by "do-it install"/);
+  assert.ok(plist.startsWith(`<?xml version="1.0" encoding="UTF-8"?>\n<!-- ${MARKER} -->\n`));
   assert.match(plist, /<key>Label<\/key>\s*<string>do-it<\/string>/);
   assert.match(plist, /<key>DO_IT_CLAUDE_BIN<\/key>\s*<string>\/home\/me\/\.local\/bin\/claude<\/string>/);
   assert.match(plist, /<key>DO_IT_PORT<\/key>\s*<string>8787<\/string>/);
   assert.match(plist, /<string>\/usr\/bin\/node<\/string>\s*<string>\/opt\/do-it\/bin\/do-it\.mjs<\/string>\s*<string>start<\/string>/);
-  assert.deepEqual(m.calls, [['launchctl', 'bootout', 'gui/501/do-it'], ['launchctl', 'bootstrap', 'gui/501', file]]);
+  assert.deepEqual(m.calls, [['launchctl', 'print', 'gui/501/do-it'], ['launchctl', 'bootout', 'gui/501/do-it'], ['launchctl', 'bootstrap', 'gui/501', file]]);
   m.calls.length = 0;
   await uninstall(inst, { ...m, ...common, platform: 'darwin' });
   assert.deepEqual(m.calls, [['launchctl', 'bootout', 'gui/501/do-it']]);
@@ -176,4 +180,47 @@ test('status reports installation, service state and whether it answers', async 
 
 test('unsupported platforms are refused clearly', () => {
   assert.throws(() => plan(instance({ home: HOME }), { ...common, platform: 'aix' }), /doesn't support aix/);
+});
+
+test('a unit or agent of the same name loaded from another file is not replaced', async () => {
+  const inst = instance({ name: 'pipewire', port: 8790, configDir: realConfigDir(), home: HOME });
+  const linux = machine({ answers: (c, a) => (a[1] === 'show' ? { ok: true, stdout: 'LoadState=loaded\nFragmentPath=/usr/lib/systemd/user/pipewire.service' } : { ok: true }) });
+  await assert.rejects(install(inst, { ...linux, ...common, platform: 'linux' }), /already loaded from \/usr\/lib\/systemd\/user\/pipewire\.service/);
+  assert.deepEqual(Object.keys(linux.fs.files), []);
+  assert.equal(linux.calls.length, 1);
+  const mac = machine({ answers: (c, a) => (a[0] === 'print' ? { ok: true, stdout: 'gui/501/pipewire = {\n\tpath = /Library/LaunchAgents/other.plist\n}' } : { ok: true }) });
+  await assert.rejects(install(inst, { ...mac, ...common, platform: 'darwin' }), /already loaded from \/Library\/LaunchAgents\/other\.plist/);
+  assert.ok(!mac.calls.some(c => c[1] === 'bootout'));
+});
+
+test('install and status recognise this instance by its public URL, not just anything on the port', async () => {
+  const inst = instance({ name: 'do-it-test', port: 8787, configDir: realConfigDir(), home: HOME });
+  const other = machine({ answering: 'https://someone-else.example/mcp' });
+  await assert.rejects(install(inst, { ...other, ...common, platform: 'linux' }), /answers as https:\/\/someone-else\.example\/mcp, which is another Do-It/);
+  const said = [];
+  const m = machine({ answering: 'https://someone-else.example/mcp', answers: () => ({ ok: true, stdout: 'ActiveState=inactive' }) });
+  assert.deepEqual(await status(inst, { ...m, ...common, platform: 'linux', say: l => said.push(l) }), { installed: false, answering: false });
+  assert.match(said.join('\n'), /a different Do-It; is --port right\?/);
+});
+
+test('macOS re-install retries bootstrap while launchd finishes the bootout', async () => {
+  const inst = instance({ configDir: realConfigDir(), home: HOME });
+  const file = '/home/me/Library/LaunchAgents/do-it.plist';
+  let failures = 2;
+  const m = machine({
+    files: { [file]: `<?xml version="1.0"?>\n<!-- ${MARKER} -->\n` },
+    answers: (c, a) => (a[0] === 'bootstrap' && failures-- > 0 ? { ok: false, code: 5, stderr: 'Bootstrap failed: 5: Input/output error' } : { ok: true, stdout: '' }),
+  });
+  await install(inst, { ...m, ...common, platform: 'darwin' });
+  assert.equal(m.calls.filter(c => c[1] === 'bootstrap').length, 3);
+});
+
+test('do-it service keeps the default unit unchanged and names a custom instance', async () => {
+  const { serviceFile } = await import('../src/service.mjs');
+  const plain = serviceFile({ platform: 'linux', node: '/n', appDir: '/a', home: '/h', claude: '/c' });
+  assert.match(plain, /^Description=Do-It MCP server for remote Claude Code control$/m);
+  assert.doesNotMatch(plain, /DO_IT_PORT|\{\{/);
+  const named = serviceFile({ platform: 'linux', node: '/n', appDir: '/a', home: '/h', claude: '/c', label: 'do-it-test', extraEnv: { DO_IT_PORT: '8788' } });
+  assert.match(named, /^Description=Do-It MCP server for remote Claude Code control \(do-it-test\)$/m);
+  assert.match(named, /^Environment="DO_IT_PORT=8788"$/m);
 });
