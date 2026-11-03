@@ -36,8 +36,11 @@ export async function machineChecks({ add, command, exec = run, env = process.en
   return { claudeBin };
 }
 
+// The `do-it <sub>` command for an instance, with the options that select it.
+export const commandFor = inst => sub => `do-it ${sub}${inst.name === 'do-it' ? '' : ` --name ${inst.name}${inst.port === 8787 ? '' : ` --port ${inst.port}`}`}`;
+
 export async function doctor(inst, { exec = run, fs = realFs, fetchImpl = fetch, say = console.log, env = process.env, platform = process.platform, nodeVersion = process.versions.node, probeImpl = probe, claude, ...options } = {}) {
-  const command = sub => `do-it ${sub}${inst.name === 'do-it' ? '' : ` --name ${inst.name}${inst.port === 8787 ? '' : ` --port ${inst.port}`}`}`;
+  const command = commandFor(inst);
   const results = [];
   const add = result => { results.push(result); say(`  ${MARK[result.level]} ${result.text}`); if (result.fix) say(`      ${result.level === 'fail' ? 'Fix' : 'Note'}: ${result.fix}`); return result; };
   say(`Checking ${inst.name} (settings in ${inst.configDir}, port ${inst.port}):`);
@@ -75,8 +78,10 @@ export async function doctor(inst, { exec = run, fs = realFs, fetchImpl = fetch,
   if (p && platform !== 'win32') {
     const state = await owned(p, { exec, fs });
     const service = await exec(...p.status);
-    const running = platform === 'linux' ? /ActiveState=active/.test(service.stdout) : service.ok;
-    if (state.exists && state.ours && running) add(ok(`Service ${inst.name} is installed and running`));
+    // launchctl prints a loaded job even when it isn't running; systemctl is unusable without a user session.
+    const running = platform === 'linux' ? /ActiveState=active/.test(service.stdout) : service.ok && /^\s*(state = running|pid = \d+)/m.test(service.stdout);
+    if (state.exists && state.ours && platform === 'linux' && !service.ok) add(warn(`Couldn't ask systemd about ${inst.name} (${service.stderr || 'no answer'})`, 'Over ssh, run: export XDG_RUNTIME_DIR=/run/user/$(id -u) and try again. The check below shows whether it answers.'));
+    else if (state.exists && state.ours && running) add(ok(`Service ${inst.name} is installed and running`));
     else if (state.exists && state.ours) add(fail(`Service ${inst.name} is installed but not running`, `Run: ${command('install')} (it restarts the service), then ${platform === 'linux' ? `journalctl --user -u ${inst.name} -e` : 'check ~/Library/Logs/do-it.log'} for the error.`));
     else if (resource) add(warn(`Do-It is running on port ${inst.port}, but not as a service, so it stops when this terminal closes`, `Run: ${command('install')}`));
     else add(fail(`Service ${inst.name} is not installed`, `Run: ${command('install')}`));
@@ -119,7 +124,7 @@ export async function doctor(inst, { exec = run, fs = realFs, fetchImpl = fetch,
           method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({ client_id: github.clientId, client_secret: github.clientSecret, code: 'do-it-doctor-check' }),
         });
-        const { error } = await response.json();
+        const { error } = await response.json().catch(() => ({}));
         if (response.status === 404) add(fail("GitHub doesn't recognise the client ID in github.json", `Copy the client ID from your GitHub app's settings page, then run ${command('setup')}.`));
         else if (error === 'bad_verification_code') add(ok('GitHub accepts the app\'s client ID and secret'));
         else if (error === 'incorrect_client_credentials') add(fail('GitHub rejects the client ID or secret in github.json', `Copy them again from your GitHub app's settings (a new client secret is fine), then run ${command('setup')}.`));

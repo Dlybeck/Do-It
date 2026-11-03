@@ -18,10 +18,12 @@ export function addFolder(configDir, folder) {
 
 // A terminal asker that hides what is typed for secrets. Lines are queued, so piped
 // answers that arrive before their question are not lost.
-export function terminalAsker(input = process.stdin, output = process.stdout) {
+export function terminalAsker(input = process.stdin, output = process.stdout, { onInterrupt = () => process.exit(130) } = {}) {
   let muted = false;
   const sink = new Writable({ write(chunk, encoding, done) { if (!muted) output.write(chunk, encoding); done(); } });
   const rl = createInterface({ input, output: sink, terminal: Boolean(input.isTTY) });
+  // In a terminal readline swallows Ctrl+C unless told otherwise, which would leave a long wait running.
+  rl.on('SIGINT', () => { output.write('\n'); onInterrupt(); });
   const lines = [];
   const waiting = [];
   let closed = false;

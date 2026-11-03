@@ -6,7 +6,7 @@ import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { PUBLIC_URL, readJson, writeJson } from './config.mjs';
-import { doctor, machineChecks } from './doctor.mjs';
+import { commandFor, doctor, machineChecks } from './doctor.mjs';
 import { createGithubApp, manualAppUrl, callbackUrl } from './github-app.mjs';
 import { install, run } from './install.mjs';
 import { existingRoot } from './paths.mjs';
@@ -34,8 +34,13 @@ export async function runSetup({ configDir, ask, say = console.log, port = 8787,
     }
   };
   const yes = async (label, fallback = true) => {
-    const answer = (await ask(`${label} [${fallback ? 'Y/n' : 'y/N'}]: `)).trim().toLowerCase();
-    return answer ? answer.startsWith('y') : fallback;
+    for (;;) {
+      const answer = (await ask(`${label} [${fallback ? 'Y/n' : 'y/N'}]: `)).trim().toLowerCase();
+      if (!answer) return fallback;
+      if (/^y(es)?$/.test(answer)) return true;
+      if (/^no?$/.test(answer)) return false;
+      say('  Please answer y or n.');
+    }
   };
 
   say(`Settings go in ${configDir}.\n`);
@@ -63,8 +68,11 @@ export async function runSetup({ configDir, ask, say = console.log, port = 8787,
   let publicUrl = config.publicUrl;
   if (publicUrl) publicUrl = await askAddress(publicUrl);
   else {
-    const ts = await detectTailscale(exec);
-    if (!ts) {
+    const ts = await detectTailscale(exec, port);
+    if (ts?.own) {
+      publicUrl = `https://${ts.dnsName}`;
+      say(`  Tailscale Funnel already forwards https://${ts.dnsName} to Do-It on port ${port}; using it.`);
+    } else if (!ts) {
       say('  Tailscale Funnel, Cloudflare Tunnel, ngrok or Caddy can provide this; point it at 127.0.0.1:' + port + '.');
     } else if (!ts.httpsAllowed || !ts.funnelAllowed) {
       say(`  Tailscale is running (${ts.dnsName}), but ${ts.httpsAllowed ? 'Funnel' : 'HTTPS'} isn't enabled for this machine in your tailnet.`);
@@ -123,7 +131,8 @@ export async function runSetup({ configDir, ask, say = console.log, port = 8787,
 // `do-it install`: checks the machine, runs the setup above when there are no settings yet,
 // installs and starts the service, then runs doctor. Returns doctor's report.
 export async function guidedInstall(inst, { ask, say = console.log, claude, exec = run, fetchImpl = fetch, createApp, manualGithub, ...deps } = {}) {
-  const command = sub => `do-it ${sub}${inst.name === 'do-it' ? '' : ` --name ${inst.name}`}`;
+  const command = commandFor(inst);
+  if ((deps.platform ?? process.platform) === 'win32') say('Note: Windows is not yet supported. Setup will try, but nothing here has been tested on Windows.\n');
   say('Checking this machine:');
   let failed = false;
   await machineChecks({ add: r => { say(`  ${{ ok: '✓', warn: '!', fail: '✗', skip: '-' }[r.level]} ${r.text}`); if (r.fix) say(`      Fix: ${r.fix}`); failed ||= r.level === 'fail'; }, command, exec, claude, nodeVersion: deps.nodeVersion, platform: deps.platform, env: deps.env });

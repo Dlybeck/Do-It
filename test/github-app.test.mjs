@@ -14,15 +14,17 @@ const unescape = text => text.replace(/&#(\d+);/g, (_, n) => String.fromCharCode
 async function start({ conversion, ping = true, ...options } = {}) {
   const port = options.port ?? await freePort();
   const converted = [];
+  let pings = 0;
   const fetchImpl = async (url, init) => {
     const u = String(url);
-    if (u.startsWith(PUBLIC)) return ping ? fetch(`http://127.0.0.1:${port}${u.slice(PUBLIC.length)}`, init) : Promise.reject(new TypeError('fetch failed'));
+    // `ping` is true, false, or the number of failed attempts before the tunnel starts answering.
+    if (u.startsWith(PUBLIC)) return ping === true || (typeof ping === 'number' && ++pings > ping) ? fetch(`http://127.0.0.1:${port}${u.slice(PUBLIC.length)}`, init) : Promise.reject(new TypeError('fetch failed'));
     if (u.startsWith('https://api.github.test/app-manifests/')) { converted.push(u); return conversion ? conversion() : Response.json({ client_id: 'Iv23liNEW', client_secret: 'newsecret123', slug: 'do-it-me', name: 'Do-It me abcd', html_url: 'https://github.test/apps/do-it-me' }, { status: 201 }); }
     throw new Error(`unexpected ${u}`);
   };
   let ready;
   const readyPromise = new Promise(resolve => { ready = resolve; });
-  const result = createGithubApp({ publicUrl: PUBLIC, port, login: 'octocat', fetchImpl, onReady: ready, apiBase: 'https://api.github.test', formBase: 'https://github.test', ...options });
+  const result = createGithubApp({ publicUrl: PUBLIC, port, login: 'octocat', fetchImpl, onReady: ready, pingForMs: 150, pingEveryMs: 10, apiBase: 'https://api.github.test', formBase: 'https://github.test', ...options });
   const outcome = result.then(value => ({ value }), error => ({ error }));
   const info = await Promise.race([readyPromise, outcome.then(o => { throw o.error ?? new Error('finished early'); })]);
   const local = path => `http://127.0.0.1:${port}${new URL(info.url).pathname}${path}`;
@@ -73,19 +75,23 @@ test('the flow gives up with a clear reason: GitHub fails, nobody clicks, the ad
   const failed = await start({ conversion: () => Response.json({ message: 'Not Found' }, { status: 404 }) });
   const response = await fetch(failed.local(`/callback?code=abc&state=${failed.info.token}`));
   assert.equal(response.status, 502);
-  assert.match((await failed.outcome).error.message, /didn't hand over the new app's details \(GitHub answered 404: Not Found\)/);
+  assert.match((await failed.outcome).error.message, /didn't hand over the new app's details \(GitHub answered 404: Not Found\)\. An app may already exist at https:\/\/github\.com\/settings\/apps/);
 
   const idle = await start({ timeoutMs: 50 });
   assert.match((await idle.outcome).error.message, /Nobody finished creating the app within 10 minutes/);
 
   const port = await freePort();
   await assert.rejects(start({ port, ping: false }), /doesn't reach this machine on port \d+ yet/);
+  // A tunnel that was only just switched on answers after a few tries, so those are retried.
+  const slow = await start({ ping: 3, timeoutMs: 100 });
+  assert.match(slow.info.url, /\/setup\/github\//);
+  await slow.outcome;
   // The page was shut down again, so the port is free for the service.
   await assert.rejects(fetch(`http://127.0.0.1:${port}/`), /fetch failed/);
 
   const held = createServer(); // something already on the port
   await new Promise(resolve => held.listen(0, '127.0.0.1', resolve));
-  await assert.rejects(start({ port: held.address().port }), /Port \d+ is in use .*setup page can't start/);
+  await assert.rejects(start({ port: held.address().port }), /Port \d+ is in use .*Run "do-it uninstall" first.*setup page can't start/);
   held.close();
 });
 

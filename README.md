@@ -73,6 +73,10 @@ writes `~/.config/do-it/config.json` and `github.json` (readable only by you). I
    runs sudo itself.
 7. **`do-it doctor`.** See below.
 
+The one-click GitHub app needs the setup page on Do-It's port, so it only runs while Do-It
+isn't already running there. To replace the app of an installed instance, run `do-it uninstall`,
+then `do-it setup`, then `do-it install` (settings and sign-in state are kept), or use the manual form.
+
 `install` is safe to run again, for example after moving or reinstalling `claude`: it keeps
 your settings, rewrites its own service file and restarts the service. `do-it setup` runs
 just the questions (steps 2 to 5). `do-it status` shows whether the service is installed,

@@ -18,14 +18,14 @@ const tailscaleStatus = ({ state = 'Running', caps = { https: [], funnel: [] } }
 const serving = busy => (busy ? JSON.stringify({ TCP: { 443: { HTTPS: true } }, Web: { [`${DNS}:443`]: {} } }) : '{}');
 
 // A machine with gh and Tailscale, unless a test removes them. Records every command run.
-function machine({ gh = 'octocat', tailscale = tailscaleStatus(), busy = false, funnel = { ok: true, stdout: 'Available on the internet' } } = {}) {
+function machine({ gh = 'octocat', tailscale = tailscaleStatus(), busy = false, serve, funnel = { ok: true, stdout: 'Available on the internet' } } = {}) {
   const calls = [];
   const exec = async (command, args) => {
     calls.push([command, ...args]);
     const answer = (ok, stdout = '', stderr = '') => ({ ok, code: ok ? 0 : 1, stdout, stderr });
     if (command === 'gh') return gh ? answer(true, gh) : answer(false, '', 'gh: command not found');
     if (command === 'tailscale' && args[0] === 'status') return tailscale ? answer(true, tailscale) : answer(false, '', 'not found');
-    if (command === 'tailscale' && args[0] === 'serve') return answer(true, serving(busy));
+    if (command === 'tailscale' && args[0] === 'serve') return serve ?? answer(true, serving(busy));
     if (command === 'tailscale' && args[0] === 'funnel') return { code: funnel.ok ? 0 : 1, stderr: '', ...funnel };
     return answer(false, '', 'unexpected');
   };
@@ -144,7 +144,7 @@ test('--manual-github never tries the one-click flow, and a re-run keeps an exis
 });
 
 test('Tailscale detection reads the machine name, the tailnet permissions and whether anything is already served', async () => {
-  assert.deepEqual(await detectTailscale(machine().exec), { dnsName: DNS, httpsAllowed: true, funnelAllowed: true, busy: false });
+  assert.deepEqual(await detectTailscale(machine().exec), { dnsName: DNS, httpsAllowed: true, funnelAllowed: true, busy: false, own: false });
   assert.equal((await detectTailscale(machine({ busy: true }).exec)).busy, true);
   assert.equal(await detectTailscale(machine({ tailscale: null }).exec), undefined);
   assert.equal(await detectTailscale(machine({ tailscale: tailscaleStatus({ state: 'Stopped' }) }).exec), undefined);
@@ -230,4 +230,69 @@ test('do-it install on an already set-up instance skips the prompts and just rei
   assert.equal(asked.length, 0);
   assert.doesNotMatch(t.said.join('\n'), /1\/4  Folders/);
   assert.match(t.said.join('\n'), /Updated systemd user unit/);
+});
+
+test('Tailscale: a serve status that cannot be read counts as busy, and Do-It\'s own Funnel is recognised', async () => {
+  const failed = { ok: false, code: 1, stdout: '', stderr: 'permission denied' };
+  assert.equal((await detectTailscale(machine({ serve: failed }).exec)).busy, true);
+  assert.equal((await detectTailscale(machine({ serve: { ok: true, code: 0, stdout: 'something odd', stderr: '' } }).exec)).busy, true);
+  assert.equal((await detectTailscale(machine({ serve: { ok: true, code: 0, stdout: 'No serve config', stderr: '' } }).exec)).busy, false);
+  const own = port => ({ ok: true, code: 0, stderr: '', stdout: JSON.stringify({ TCP: { 443: { HTTPS: true } }, Web: { [`${DNS}:443`]: { Handlers: { '/': { Proxy: `http://127.0.0.1:${port}` } } } } }) });
+  assert.deepEqual(await detectTailscale(machine({ serve: own(8787) }).exec, 8787), { dnsName: DNS, httpsAllowed: true, funnelAllowed: true, busy: true, own: true });
+  assert.equal((await detectTailscale(machine({ serve: own(8787) }).exec, 8788)).own, false); // someone else's port
+  assert.equal((await detectTailscale(machine({ busy: true }).exec)).own, false);
+});
+
+test('setup reuses a Funnel that already points at Do-It instead of asking for an address', async () => {
+  const dir = home();
+  const own = { ok: true, code: 0, stderr: '', stdout: JSON.stringify({ TCP: { 443: { HTTPS: true } }, Web: { [`${DNS}:443`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:8787' } } } } }) };
+  const m = machine({ serve: own });
+  const said = [];
+  const { asked, ask } = scripted(['', '', '', 'n', 'Iv1.manual1', 'manual-secret-1']); // no address question
+  await runSetup({ configDir: path.join(dir, 'config'), ask, exec: m.exec, home: dir, say: l => said.push(l) });
+  assert.match(said.join('\n'), new RegExp(`Funnel already forwards https://${DNS} to Do-It on port 8787; using it`));
+  assert.equal(json(path.join(dir, 'config'), 'config.json').publicUrl, `https://${DNS}`);
+  assert.equal(asked.some(([q]) => /Public https address/.test(q)), false);
+  assert.equal(m.calls.filter(c => c[0] === 'tailscale' && c[1] === 'funnel').length, 0);
+  assert.ok(!said.join('\n').includes('manual-secret-1')); // a pasted secret is never echoed back
+});
+
+test('yes/no questions re-ask on an answer they do not understand instead of declining', async () => {
+  const dir = home();
+  const m = machine();
+  const said = [];
+  const { ask, asked } = scripted(['', '', 'yup', 'maybe', 'y', '1', 'n', 'Iv1.manual1', 'manual-secret-1']);
+  await runSetup({ configDir: path.join(dir, 'config'), ask, exec: m.exec, home: dir, say: l => said.push(l) });
+  assert.equal(said.filter(l => /Please answer y or n/.test(l)).length, 3);
+  assert.equal(m.calls.filter(c => c[0] === 'tailscale' && c[1] === 'funnel').length, 1); // "y" finally turned Funnel on
+  assert.equal(asked.filter(([q]) => /Funnel/.test(q)).length, 3);
+});
+
+test('the Ctrl+C key ends setup at any prompt, and install warns that Windows is not yet supported', async () => {
+  const { PassThrough } = await import('node:stream');
+  const { terminalAsker } = await import('../src/cli.mjs');
+  const input = new PassThrough();
+  input.isTTY = true;
+  let interrupted = 0;
+  const asker = terminalAsker(input, new PassThrough(), { onInterrupt: () => { interrupted++; } });
+  const pending = asker.ask('Waiting: ').catch(() => {});
+  input.write('\x03');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(interrupted, 1);
+  asker.close();
+  await pending;
+
+  const t = installMachine({ claudeOk: false });
+  await assert.rejects(guidedInstall(t.inst, { ...t.deps, platform: 'win32', ask: scripted([]).ask }), /Fix the problems above/);
+  assert.match(t.said[0], /^Note: Windows is not yet supported/);
+});
+
+test('fix commands during install name the instance and its port, like doctor does', async () => {
+  const t = installMachine({ loggedIn: false });
+  const inst = { ...t.inst, name: 'do-it-t', port: 8799 };
+  await assert.rejects(guidedInstall(inst, { ...t.deps, ask: scripted([]).ask }), /Fix the problems above/);
+  assert.match(t.said.join('\n'), /Fix: Run: claude auth login/);
+  const { commandFor } = await import('../src/doctor.mjs');
+  assert.equal(commandFor(inst)('install'), 'do-it install --name do-it-t --port 8799');
+  assert.equal(commandFor({ name: 'do-it', port: 8787 })('doctor'), 'do-it doctor');
 });

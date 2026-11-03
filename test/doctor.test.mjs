@@ -11,7 +11,7 @@ const CLAUDE = '/home/me/.local/bin/claude';
 const PUBLIC = 'https://box.example.ts.net';
 
 // A working setup unless a test breaks one part of it.
-function scenario({ publicUrl = PUBLIC, port = 8787, name = 'do-it', node = '22.23.0', claude = {}, config, github, folders = ['ok'], service = 'running', linger = 'yes', answering = `${PUBLIC}/mcp`, net = {}, creds = 'bad_verification_code' } = {}) {
+function scenario({ platform = 'linux', publicUrl = PUBLIC, port = 8787, name = 'do-it', node = '22.23.0', claude = {}, config, github, folders = ['ok'], service = 'running', linger = 'yes', answering = `${PUBLIC}/mcp`, net = {}, creds = 'bad_verification_code' } = {}) {
   const base = realpathSync(mkdtempSync(path.join(tmpdir(), 'do-it-doctor-')));
   const roots = folders.map(f => path.join(base, f));
   if (folders.includes('ok')) mkdirSync(path.join(base, 'ok'));
@@ -20,7 +20,7 @@ function scenario({ publicUrl = PUBLIC, port = 8787, name = 'do-it', node = '22.
   if (config !== null) writeFileSync(path.join(configDir, 'config.json'), JSON.stringify(config ?? { publicUrl, allowedRoots: roots }));
   if (github !== null) writeFileSync(path.join(configDir, 'github.json'), JSON.stringify(github ?? { clientId: 'Iv1.abc123', clientSecret: 'secret-secret', allowedLogins: ['me'] }));
   const inst = { ...instance({ name, port, configDir, home: '/home/me' }), configDir };
-  const unit = `/home/me/.config/systemd/user/${name}.service`;
+  const unit = platform === 'darwin' ? `/home/me/Library/LaunchAgents/${name}.plist` : `/home/me/.config/systemd/user/${name}.service`;
   const calls = [];
   const exec = async (command, args) => {
     calls.push([command, ...args]);
@@ -28,6 +28,8 @@ function scenario({ publicUrl = PUBLIC, port = 8787, name = 'do-it', node = '22.
     if (command === CLAUDE && args[0] === '--version') return claude.version ?? answer(true, '2.1.317 (Claude Code)');
     if (command === CLAUDE && args[0] === 'auth') return claude.auth ?? answer(true, JSON.stringify({ loggedIn: true }));
     if (command === CLAUDE && args[0] === 'agents') return claude.agents ?? answer(true, '[]');
+    if (command === 'launchctl') return answer(true, service === 'running' ? '\tstate = running\n\tpid = 12' : service === 'stopped' ? '\tstate = not running' : '');
+    if (command === 'systemctl' && service === 'unavailable') return answer({ ok: false, stdout: '', stderr: 'Failed to connect to bus: No medium found' });
     if (command === 'systemctl') return answer(true, `LoadState=loaded\nActiveState=${service === 'running' ? 'active' : 'inactive'}\nMainPID=1`);
     if (command === 'loginctl') return answer(true, linger);
     return answer(false, '');
@@ -45,7 +47,7 @@ function scenario({ publicUrl = PUBLIC, port = 8787, name = 'do-it', node = '22.
     return typeof handler === 'function' ? handler() : handler;
   };
   const said = [];
-  const run = () => doctor(inst, { exec, fs, fetchImpl, say: l => said.push(l), env: { PATH: '/home/me/.local/bin' }, platform: 'linux', nodeVersion: node, claude: CLAUDE, home: '/home/me', uid: 501, user: 'me', node: '/usr/bin/node', appDir: '/opt/do-it', probeImpl: async () => answering || undefined });
+  const run = () => doctor(inst, { exec, fs, fetchImpl, say: l => said.push(l), env: { PATH: '/home/me/.local/bin' }, platform, nodeVersion: node, claude: CLAUDE, home: '/home/me', uid: 501, user: 'me', node: '/usr/bin/node', appDir: '/opt/do-it', probeImpl: async () => answering || undefined });
   return { run, said, calls, text: () => said.join('\n') };
 }
 
@@ -121,4 +123,32 @@ test('doctor: a second instance gets fixes that name it, and GitHub being unreac
   assert.match(offline.text(), /! Couldn't reach github\.com/);
   const odd = scenario({ creds: 'something_new' });
   assert.match((await odd.run(), odd.text()), /! Couldn't confirm the client ID and secret with GitHub \(something_new\)/);
+});
+
+test('doctor: a GitHub 404 with a body that is not JSON is still the unknown-client-ID failure', async () => {
+  const s = scenario({ net: { 'https://github.com/login/oauth/access_token': () => new Response('<html>Not Found</html>', { status: 404 }) } });
+  assert.equal((await s.run()).ok, false);
+  assert.match(s.text(), /GitHub doesn't recognise the client ID/);
+  assert.doesNotMatch(s.text(), /Couldn't reach github\.com/);
+});
+
+test('doctor on macOS: a job launchd has loaded but is not running is a failure, a running one passes', async () => {
+  const stopped = scenario({ platform: 'darwin', service: 'stopped', answering: '' });
+  assert.equal((await stopped.run()).ok, false);
+  assert.match(stopped.text(), /Service do-it is installed but not running[\s\S]*check ~\/Library\/Logs\/do-it\.log/);
+  const running = scenario({ platform: 'darwin' });
+  const report = await running.run();
+  assert.equal(report.ok, true);
+  assert.match(running.text(), /Service do-it is installed and running/);
+  assert.ok(!running.calls.some(c => c[0] === 'loginctl')); // linger is a Linux thing
+});
+
+test('doctor on Linux: a systemd that cannot be asked is a note with the fix, and the port check still decides', async () => {
+  const s = scenario({ service: 'unavailable' });
+  const report = await s.run();
+  assert.equal(report.ok, true);
+  assert.match(s.text(), /! Couldn't ask systemd about do-it \(Failed to connect to bus.*\)\n\s+Note: Over ssh, run: export XDG_RUNTIME_DIR=\/run\/user\/\$\(id -u\)/);
+  assert.match(s.text(), /Answering on 127\.0\.0\.1:8787/);
+  const down = scenario({ service: 'unavailable', answering: '' });
+  assert.equal((await down.run()).ok, false);
 });

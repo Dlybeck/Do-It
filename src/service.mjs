@@ -26,6 +26,7 @@ export function serviceFile({ platform = process.platform, env = process.env, no
   const dirs = [path.dirname(node), path.dirname(claudeBin), ...(platform === 'darwin' ? ['/opt/homebrew/bin'] : []), '/usr/local/bin', '/usr/bin', '/bin'];
   const values = { NODE: node, APP_DIR: appDir, CLAUDE_BIN: claudeBin, HOME: home, LABEL: label, LABEL_SUFFIX: label === 'do-it' ? '' : ` (${label})`, PATH: [...new Set(dirs)].join(':') };
   const extra = Object.entries(extraEnv).map(([key, value]) => envLines[platform](key, value, escape)).join('');
+  // The templates ship with this code, wherever the service will run it from (appDir).
   const template = readFileSync(path.join(APP_DIR, 'deploy', platform === 'darwin' ? 'do-it.plist' : 'do-it.service'), 'utf8');
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => (key === 'EXTRA_ENV' ? extra : escape(values[key])));
 }
