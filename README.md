@@ -26,7 +26,7 @@ login, your settings and your files. Do-It itself has no model access.
 
 ## Setup
 
-1. **Install.**
+1. **Get the code.**
 
    ```sh
    git clone https://github.com/Dlybeck/Do-It.git && cd Do-It
@@ -46,19 +46,19 @@ login, your settings and your files. Do-It itself has no model access.
    something else, `deploy/tailscale/serve.json` is a serve config for running Funnel from
    a separate Tailscale node in the official container.
 
-3. **Run setup.**
+3. **Install it as a background service.**
 
    ```sh
-   do-it setup
+   do-it install
    ```
 
-   It asks for:
+   If there are no settings yet, this runs `do-it setup` first. Setup asks for:
    - the folders Do-It may use
    - the GitHub login(s) allowed to sign in
    - your public address
    - the details of a GitHub OAuth App
 
-   To get the OAuth App details, it tells you what to enter at
+   To get the OAuth App details, setup tells you what to enter at
    <https://github.com/settings/developers> → **New OAuth App**:
    - **Homepage URL:** your address
    - **Authorization callback URL:** `<your address>/oauth/github/callback`
@@ -66,33 +66,65 @@ login, your settings and your files. Do-It itself has no model access.
    Leave device flow off, and paste the client ID and a new client secret back into setup.
    Setup writes `~/.config/do-it/config.json` and `github.json`, readable only by you.
 
-4. **Keep it running.** `do-it service` prints a service file with the full paths to
-   `node`, Do-It and `claude` filled in.
+   Then `install` sets up a service that runs as you and starts at login. It checks that
+   Do-It answers on `127.0.0.1:8787`.
+   - **Linux:** a systemd user unit in `~/.config/systemd/user/do-it.service`, enabled and
+     started. To keep it running while you're logged out, run
+     `sudo loginctl enable-linger $USER`; `install` reminds you if that's needed, but it
+     never runs sudo itself.
+   - **macOS:** a launchd agent in `~/Library/LaunchAgents/do-it.plist`, loaded with
+     `launchctl bootstrap`. launchd starts programs with a minimal PATH, so the agent names
+     `node` and the `claude` CLI by their full paths. Logs go to `~/Library/Logs/do-it.log`.
 
-   On Linux (systemd):
+   `install` is safe to run again, for example after moving or reinstalling `claude`: it
+   rewrites its own service file and restarts the service. `do-it status` shows whether the
+   service is installed, running and answering. `do-it uninstall` stops it and removes only
+   what `install` created; your settings and sign-in state stay. `install` and `uninstall`
+   never touch a service of the same name that they didn't create. To run Do-It in the
+   foreground instead, use `do-it start`.
 
-   ```sh
-   do-it service > ~/.config/systemd/user/do-it.service
-   systemctl --user daemon-reload && systemctl --user enable --now do-it
-   sudo loginctl enable-linger "$USER"   # keep it running while you're logged out
-   ```
-
-   On macOS (launchd):
-
-   ```sh
-   do-it service > ~/Library/LaunchAgents/do-it.plist
-   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/do-it.plist
-   ```
-
-   launchd starts programs with a minimal PATH, so the plist names the `claude` CLI by its
-   full path in `DO_IT_CLAUDE_BIN`. If you move or reinstall `claude`, run `do-it service`
-   again. Logs go to `~/Library/Logs/do-it.log`. To run Do-It in the foreground instead,
-   use `do-it start`.
-
-5. **Connect.** In claude.ai, go to **Settings → Connectors → Add custom connector** and
+4. **Connect.** In claude.ai, go to **Settings → Connectors → Add custom connector** and
    enter `<your address>/mcp`. Leave the OAuth client fields empty. You'll sign in with
    GitHub, then approve the client on Do-It's own page. That page only appears the first
    time a client connects; approve it only if you just clicked Connect yourself.
+
+### A second instance
+
+`--name` installs another instance next to the first. It gets its own config and state
+folders (`~/.config/<name>`, `~/.local/state/<name>`), so give it its own `--port`:
+
+```sh
+do-it install --name do-it-test --port 8788
+do-it status --name do-it-test --port 8788
+do-it uninstall --name do-it-test --port 8788
+```
+
+`--config-dir`, `--state-dir` and `--claude-bin` override the folders and the path to
+`claude`. Every command takes the same options.
+
+### Setting up the service by hand
+
+If you'd rather not use `install`, `do-it service` prints the same service file with the
+full paths to `node`, Do-It and `claude` filled in. Unlike `install`, it always uses the
+default name.
+
+On Linux (systemd):
+
+```sh
+do-it service > ~/.config/systemd/user/do-it.service
+systemctl --user daemon-reload && systemctl --user enable --now do-it
+sudo loginctl enable-linger "$USER"   # keep it running while you're logged out
+```
+
+On macOS (launchd):
+
+```sh
+do-it service > ~/Library/LaunchAgents/do-it.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/do-it.plist
+```
+
+A file made this way has no install marker, so `do-it install` and `uninstall` leave it
+alone. Remove it yourself if you switch to `install`.
 
 ## The allowlist
 
@@ -236,7 +268,9 @@ doesn't reach Claude Code's background sessions.
   Two pieces are already in place: drive roots like `C:\` are refused as allowed roots,
   and an npm `claude.cmd` install is run without a shell, by finding the script or `.exe`
   the shim wraps. If that fails, set `DO_IT_CLAUDE_BIN` to `claude.exe` or to the CLI's
-  `.js` file. The optional role-context hook is plain Node.js and needs no changes there.
+  `.js` file. `do-it install` would register a hidden Task Scheduler task that runs at
+  logon and restarts on failure. That path has only been tested against generated files,
+  never on a real Windows machine. The optional role-context hook is plain Node.js and needs no changes there.
 
 ## Configuration reference
 
