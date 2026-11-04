@@ -24,11 +24,15 @@ and through them commands, so only allow logins and folders you trust. It is not
 ## Do-It or Remote Control?
 
 Anthropic's [Remote Control](https://code.claude.com/docs/en/remote-control) connects
-claude.ai/code or the Claude mobile app to Claude Code sessions running on your machine. The code
-runs locally, `claude remote-control` server mode can start sessions on demand (up to 32 by
-default), and the computer and the `claude` process must stay running. It is on Pro, Max, Team and
-Enterprise plans, not with API keys, and Team and Enterprise need an admin to turn it on. Claude
-Code on the web is different: its sessions run in Anthropic's cloud, not on your machine.
+claude.ai/code or the Claude mobile app to Claude Code sessions running on your machine. Code
+execution and file access stay on your machine, but while a session is connected its transcript
+(your messages, Claude's responses and tool activity) is stored on Anthropic's servers. The
+computer and the `claude` process must stay running. It is available on most paid Claude plans,
+not with API keys (the linked page says which plans), and on Team and Enterprise an Owner must
+first enable the Remote Control toggle in Claude Code admin settings. `claude remote-control`
+runs in server mode, waiting for remote connections and serving multiple concurrent sessions from
+one process, 32 by default. Claude Code on the web is different: its sessions run in Anthropic's
+cloud, not on your machine.
 
 If you want to drive your own sessions from a browser or phone, use Remote Control first: it's
 built in and needs no setup. Do-It is worth the extra setup when you want a Claude conversation
