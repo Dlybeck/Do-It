@@ -70,8 +70,8 @@ test('a working setup passes every check and ends with the connector URL', async
 
 // Each broken part reports a failure whose fix names the exact command or file to change.
 const BROKEN = [
-  ['an old Node.js', { node: '20.1.0' }, /Node\.js 20\.1\.0 is too old[\s\S]*Install Node\.js 22\+/],
-  ['no claude CLI', { claude: { version: { ok: false, stdout: '' } } }, /claude CLI was not found[\s\S]*--claude-bin/],
+  ['an old Node.js', { node: '20.1.0' }, /Node\.js 20\.1\.0 is too old[\s\S]*Install Node\.js 22\+ from https:\/\/nodejs\.org\/en\/download/],
+  ['no claude CLI', { claude: { version: { ok: false, stdout: '' } } }, /claude CLI was not found[\s\S]*https:\/\/code\.claude\.com\/docs\/en\/setup[\s\S]*curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash[\s\S]*claude auth login[\s\S]*--claude-bin/],
   ['claude signed out', { claude: { auth: { ok: true, stdout: JSON.stringify({ loggedIn: false }) } } }, /claude is not signed in[\s\S]*Fix: Run: claude auth login/],
   ['no background sessions', { claude: { agents: { ok: false, stdout: '' } } }, /does not support background sessions[\s\S]*claude update/],
   ['no settings files', { config: null, github: null }, /Settings are incomplete: Missing .*config\.json[\s\S]*Fix: Run: do-it setup/],

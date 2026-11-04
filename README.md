@@ -8,12 +8,33 @@ folders you allow.
 It runs on your machine and drives your own `claude` CLI, so sessions use your Claude Code
 login, your settings and your files. Do-It itself has no model access.
 
+## Who it's for
+
+Do-It is for people who are comfortable in a terminal and with running a small server. It lets
+a remote caller (the Claude conversation you connect) run Claude Code sessions on this machine,
+and through them commands, so only allow logins and folders you trust. It is not a beginner tool.
+
 > **Read this first.** Do-It can run Claude Code, and Claude Code can run commands, in the
 > folders you allow. Sessions it starts run in `auto` permission mode unless asked
 > otherwise. Anyone who gets a Do-It access token can do the same. Sign-in is always on
 > and can't be turned off. Keep the allowlist narrow, and only allow GitHub accounts you
 > control. Do-It logs each request's client address and user agent to its service log; see
 > [Configuration reference](#configuration-reference).
+
+## Do-It or Remote Control?
+
+Anthropic's [Remote Control](https://code.claude.com/docs/en/remote-control) connects
+claude.ai/code or the Claude mobile app to Claude Code sessions running on your machine. The code
+runs locally, `claude remote-control` server mode can start sessions on demand (up to 32 by
+default), and the computer and the `claude` process must stay running. It is on Pro, Max, Team and
+Enterprise plans, not with API keys, and Team and Enterprise need an admin to turn it on. Claude
+Code on the web is different: its sessions run in Anthropic's cloud, not on your machine.
+
+If you want to drive your own sessions from a browser or phone, use Remote Control first: it's
+built in and needs no setup. Do-It is worth the extra setup when you want a Claude conversation
+itself to manage your sessions through MCP tools (list, read, start, message and stop many
+sessions at once, within the folders you allow), for example to have one Claude coordinate
+several long-running Claude Code jobs.
 
 ## Quick start
 
@@ -38,7 +59,7 @@ sign in with GitHub. `do-it doctor` re-checks the whole setup at any time.
   sessions (`claude --bg`, `claude agents`, `claude stop`).
 - **A public HTTPS address on port 443** that forwards to Do-It, because claude.ai only
   connects to remote MCP servers on port 443. [Tailscale Funnel](https://tailscale.com/kb/1223/funnel)
-  is the easiest: `install` finds your `*.ts.net` name and offers to turn Funnel on. Any
+  is usually the quickest: `install` finds your `*.ts.net` name and offers to turn Funnel on. Any
   tunnel or reverse proxy that serves a public hostname and forwards to `127.0.0.1:8787`
   also works, for example Cloudflare Tunnel, ngrok, or Caddy on a server you own.
 - **A GitHub account.** Do-It uses a GitHub app to sign you in. `install` creates it for you.

@@ -215,6 +215,7 @@ test('do-it install stops before asking anything when claude is missing or signe
     const { ask, asked } = scripted([]);
     await assert.rejects(guidedInstall(t.inst, { ...t.deps, ask }), /Fix the problems above, then run do-it install again/);
     assert.match(t.said.join('\n'), message);
+    if (options.claudeOk === false) assert.match(t.said.join('\n'), /https:\/\/code\.claude\.com\/docs\/en\/setup[\s\S]*curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash[\s\S]*claude auth login/); // the same hint doctor gives
     assert.equal(asked.length, 0);
     assert.deepEqual(Object.keys(t.files), []); // no service file written
     assert.equal(existsSync(path.join(t.inst.configDir, 'config.json')), false);

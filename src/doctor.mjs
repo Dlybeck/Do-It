@@ -8,6 +8,8 @@ import { callbackUrl } from './github-app.mjs';
 import { owned, plan, probe, realFs, run } from './install.mjs';
 
 const MIN_NODE = 22;
+export const CLAUDE_INSTALL_PAGE = 'https://code.claude.com/docs/en/setup';
+export const CLAUDE_INSTALL_COMMAND = 'curl -fsSL https://claude.ai/install.sh | bash';
 const ok = text => ({ level: 'ok', text });
 const warn = (text, fix) => ({ level: 'warn', text, fix });
 const fail = (text, fix) => ({ level: 'fail', text, fix });
@@ -17,12 +19,12 @@ const MARK = { ok: '✓', warn: '!', fail: '✗', skip: '-' };
 // Node, the claude CLI, its login and its background-session support. `add` records each result.
 export async function machineChecks({ add, command, exec = run, env = process.env, platform = process.platform, nodeVersion = process.versions.node, claude }) {
   const major = Number(String(nodeVersion).split('.')[0]);
-  add(major >= MIN_NODE ? ok(`Node.js ${nodeVersion}`) : fail(`Node.js ${nodeVersion} is too old (Do-It needs ${MIN_NODE} or newer)`, `Install Node.js ${MIN_NODE}+ from https://nodejs.org, then run ${command('doctor')} again.`));
+  add(major >= MIN_NODE ? ok(`Node.js ${nodeVersion}`) : fail(`Node.js ${nodeVersion} is too old (Do-It needs ${MIN_NODE} or newer)`, `Install Node.js ${MIN_NODE}+ from https://nodejs.org/en/download, then run ${command('doctor')} again.`));
 
   const claudeBin = claude ?? findClaude({ env, platform });
   const version = claudeBin ? await exec(claudeBin, ['--version']) : undefined;
   if (!version?.ok) {
-    add(fail('The claude CLI was not found', 'Install Claude Code (https://claude.com/product/claude-code), or pass --claude-bin <full path> to this command.'));
+    add(fail('The claude CLI was not found', `Install Claude Code (${CLAUDE_INSTALL_PAGE}; on macOS or Linux: ${CLAUDE_INSTALL_COMMAND}), then run: claude auth login. If it is installed somewhere unusual, pass --claude-bin <full path> to this command.`));
   } else {
     add(ok(`claude CLI: ${version.stdout.split('\n')[0]} (${claudeBin})`));
     const auth = await exec(claudeBin, ['auth', 'status']);
