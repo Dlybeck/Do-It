@@ -1,0 +1,16 @@
+# systemd user unit for Do-It. "do-it service" prints this with the paths filled in:
+#   do-it service > ~/.config/systemd/user/do-it.service
+[Unit]
+Description=Do-It MCP server for remote Claude Code control{{LABEL_SUFFIX}}
+After=network-online.target
+
+[Service]
+WorkingDirectory={{APP_DIR}}
+ExecStart="{{NODE}}" "{{APP_DIR}}/bin/do-it.mjs" start
+Environment="PATH={{PATH}}"
+Environment="DO_IT_CLAUDE_BIN={{CLAUDE_BIN}}"
+{{EXTRA_ENV}}Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

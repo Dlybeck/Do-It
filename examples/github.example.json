@@ -1,0 +1,1 @@
+{ "clientId": "your-oauth-app-client-id", "clientSecret": "your-oauth-app-client-secret", "allowedLogins": ["your-github-login"] }

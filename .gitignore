@@ -1,0 +1,13 @@
+node_modules/
+.claude/worktrees/
+
+# Real config and sign-in state live outside the repo (~/.config/do-it, ~/.local/state/do-it).
+# These keep a copy dropped into the repo by mistake out of git; the examples/ files are templates.
+config.json
+github.json
+oauth.json
+role.md
+*.env
+.env*
+*.pem
+*.key
