@@ -287,7 +287,7 @@ test('the Ctrl+C key ends setup at any prompt, and install warns that Windows is
 
   const t = installMachine({ claudeOk: false });
   await assert.rejects(guidedInstall(t.inst, { ...t.deps, platform: 'win32', ask: scripted([]).ask }), /Fix the problems above/);
-  assert.match(t.said[0], /^Note: Windows is not yet supported/);
+  assert.match(t.said[0], /^Note: the Windows installer is experimental and untested on Windows .*Windows is not yet supported\. Continuing anyway\./);
 });
 
 test('fix commands during install name the instance and its port, like doctor does', async () => {

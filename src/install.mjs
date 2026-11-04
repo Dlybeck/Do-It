@@ -1,7 +1,10 @@
 // `do-it install | uninstall | status`: run Do-It as a background service for this user.
 //   Linux:   a systemd --user unit in ~/.config/systemd/user/<name>.service
 //   macOS:   a launchd agent in ~/Library/LaunchAgents/<name>.plist
-//   Windows: a Task Scheduler task <name> that runs at logon, hidden, restarting on failure
+//   Windows: a Task Scheduler task <name> that runs at logon, hidden, restarting on failure.
+//            EXPERIMENTAL AND UNTESTED ON WINDOWS: this path has only ever been exercised against
+//            generated files and faked commands, never on a real Windows machine, and Windows is
+//            not a supported platform yet (see README, Platforms).
 // Everything install creates carries a marker, and install and uninstall refuse to touch a
 // service definition without it, so a hand-made service of the same name is left alone.
 // System commands run through `exec` (no shell), so tests can check them on any OS.
@@ -76,6 +79,9 @@ export function plan(inst, { platform = process.platform, home = homedir(), uid 
       loadedFrom: async exec => { const r = await exec('launchctl', ['print', target]); return r.ok ? (r.stdout.match(/^\s*path = (.*)$/m)?.[1] ?? 'an unknown file') : undefined; },
     };
   }
+  // EXPERIMENTAL AND UNTESTED ON WINDOWS. Kept so the work isn't lost, but it has never run on a
+  // real Windows machine, and nothing has checked that `claude --bg`, `claude agents` and
+  // `claude stop` work there. Don't describe Windows as supported until it has been tried.
   if (platform === 'win32') {
     const file = path.win32.join(inst.stateDir, `${inst.name}.task.xml`);
     return {
@@ -90,7 +96,8 @@ export function plan(inst, { platform = process.platform, home = homedir(), uid 
   throw new Error(`do-it install doesn't support ${platform}.`);
 }
 
-// Task Scheduler XML: at logon, hidden, restarts on failure, no time limit, runs node directly
+// EXPERIMENTAL AND UNTESTED ON WINDOWS (see plan()). Task Scheduler XML: at logon, hidden,
+// restarts on failure, no time limit, runs node directly
 // with the instance's settings as arguments (tasks can't set environment variables).
 // RestartOnFailure covers a task that fails to start; Task Scheduler doesn't restart one whose
 // process exits later (README, Platforms).

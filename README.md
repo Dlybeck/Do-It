@@ -12,7 +12,8 @@ login, your settings and your files. Do-It itself has no model access.
 > folders you allow. Sessions it starts run in `auto` permission mode unless asked
 > otherwise. Anyone who gets a Do-It access token can do the same. Sign-in is always on
 > and can't be turned off. Keep the allowlist narrow, and only allow GitHub accounts you
-> control.
+> control. Do-It logs each request's client address and user agent to its service log; see
+> [Configuration reference](#configuration-reference).
 
 ## Quick start
 
@@ -283,15 +284,18 @@ doesn't reach Claude Code's background sessions.
 
 - **Linux:** supported. Run with systemd.
 - **macOS:** supported. Run with launchd. The CI workflow runs the tests on macOS.
-- **Windows: not yet supported.** The background-session commands Do-It depends on
-  (`claude --bg`, `claude agents --json`, `claude stop`) haven't been checked on Windows.
-  Two pieces are already in place: drive roots like `C:\` are refused as allowed roots,
-  and an npm `claude.cmd` install is run without a shell, by finding the script or `.exe`
-  the shim wraps. If that fails, set `DO_IT_CLAUDE_BIN` to `claude.exe` or to the CLI's
-  `.js` file. `do-it install` would register a hidden Task Scheduler task that runs at
-  logon and restarts on failure. Task Scheduler only restarts a task that fails to start, not
-  one that exits later, so a crashed server stays down until the next logon. That path has
-  only been tested against generated files, never on a real Windows machine. The optional role-context hook is plain Node.js and needs no changes there.
+- **Windows: not yet supported, with an untested experimental installer path.** The
+  background-session commands Do-It depends on (`claude --bg`, `claude agents --json`,
+  `claude stop`) haven't been checked on Windows. Two pieces are already in place: drive
+  roots like `C:\` are refused as allowed roots, and an npm `claude.cmd` install is run
+  without a shell, by finding the script or `.exe` the shim wraps. If that fails, set
+  `DO_IT_CLAUDE_BIN` to `claude.exe` or to the CLI's `.js` file. The experimental installer
+  path is `do-it install`, which on Windows registers a hidden Task Scheduler task that runs
+  at logon and restarts on failure; it prints a warning and carries on. Task Scheduler only
+  restarts a task that fails to start, not one that exits later, so a crashed server stays
+  down until the next logon. That path has only been tested against generated files, never
+  on a real Windows machine. The optional role-context hook is plain Node.js and needs no
+  changes there.
 
 ## Configuration reference
 
@@ -311,8 +315,11 @@ out, stop the server, delete that file and start it again. If the file is damage
 won't start and says so, rather than replacing it.
 
 The server logs one line per HTTP request to stdout: method, path, status, client address,
-user agent and MCP protocol headers. Query strings are never logged, because they carry
-OAuth codes.
+user agent and MCP protocol headers. The client address is the `X-Forwarded-For` value your
+tunnel sends (`-` when there is none), not the socket address. Query strings are never
+logged, because they carry OAuth codes. The service log is the systemd journal on Linux
+(`journalctl --user -u do-it`, or the instance name after `-u`) and `~/Library/Logs/do-it.log`
+on macOS (the instance name replaces `do-it`).
 
 ## Development
 

@@ -132,7 +132,7 @@ export async function runSetup({ configDir, ask, say = console.log, port = 8787,
 // installs and starts the service, then runs doctor. Returns doctor's report.
 export async function guidedInstall(inst, { ask, say = console.log, claude, exec = run, fetchImpl = fetch, createApp, manualGithub, ...deps } = {}) {
   const command = commandFor(inst);
-  if ((deps.platform ?? process.platform) === 'win32') say('Note: Windows is not yet supported. Setup will try, but nothing here has been tested on Windows.\n');
+  if ((deps.platform ?? process.platform) === 'win32') say('Note: the Windows installer is experimental and untested on Windows (a Task Scheduler task that has never been run there), and Windows is not yet supported. Continuing anyway.\n');
   say('Checking this machine:');
   let failed = false;
   await machineChecks({ add: r => { say(`  ${{ ok: '✓', warn: '!', fail: '✗', skip: '-' }[r.level]} ${r.text}`); if (r.fix) say(`      Fix: ${r.fix}`); failed ||= r.level === 'fail'; }, command, exec, claude, nodeVersion: deps.nodeVersion, platform: deps.platform, env: deps.env });
